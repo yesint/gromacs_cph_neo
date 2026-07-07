@@ -59,7 +59,9 @@
 #include "gromacs/gmxlib/network.h"
 #include "gromacs/mdrunutility/mdmodulesnotifiers.h"
 #include "gromacs/mdtypes/awh_correlation_history.h"
+#include "gromacs/applied_forces/constant_ph/constant_ph.h"
 #include "gromacs/mdtypes/awh_history.h"
+#include "gromacs/mdtypes/lambda_dynamics_params.h"
 #include "gromacs/mdtypes/checkpointdata.h"
 #include "gromacs/mdtypes/df_history.h"
 #include "gromacs/mdtypes/edsamhistory.h"
@@ -1265,6 +1267,15 @@ static void do_cpt_header(XdrSerializer* serializer, gmx_bool bRead, FILE* list,
         contents->flags_awhh = 0;
     }
 
+    if (contents->file_version >= CheckPointVersion::ConstantPH)
+    {
+        do_cpt_int_err(serializer, "constant pH flags", &contents->flagsConstantpH, list);
+    }
+    else
+    {
+        contents->flagsConstantpH = 0;
+    }
+
     if (contents->file_version >= CheckPointVersion::RemoveBuildMachineInformation)
     {
         do_cpt_int_err(serializer, "pull history flags", &contents->flagsPullHistory, list);
@@ -2330,11 +2341,65 @@ static int do_cpt_files(XdrSerializer*                    serializer,
     return 0;
 }
 
+//! Constant-pH checkpoint subblocks.
+enum
+{
+    eConstantpH_NUMBER,
+    eConstantpH_DATA,
+    eConstantpHNr
+};
+static const char* const eConstantpHNames[eConstantpHNr] = { "constantph_number", "constantph_data" };
+
+/*! \brief Read/write the constant-pH (lambda dynamics) coordinates x,v to a checkpoint. */
+static int doCptConstantpH(XdrSerializer* serializer, bool bRead, int fflags, ConstantPH* constantpH, FILE* list)
+{
+    int                                  ret         = 0;
+    int                                  numResidues = 0;
+    std::vector<gmx::LambdaCoordinate>   lambdaCoordinatesTmp;
+    gmx::ArrayRef<gmx::LambdaCoordinate> lambdaCoordinates;
+    if (constantpH != nullptr)
+    {
+        lambdaCoordinates = constantpH->lambdaCoordinates();
+        numResidues       = lambdaCoordinates.size();
+    }
+    for (int i = 0; (i < eConstantpHNr && ret == 0); i++)
+    {
+        if (fflags & (1 << i))
+        {
+            switch (i)
+            {
+                case eConstantpH_NUMBER:
+                    do_cpt_int_err(serializer, eConstantpHNames[i], &numResidues, list);
+                    if (bRead && (constantpH == nullptr))
+                    {
+                        lambdaCoordinatesTmp.resize(numResidues);
+                        lambdaCoordinates = lambdaCoordinatesTmp;
+                    }
+                    break;
+                case eConstantpH_DATA:
+                    for (auto& lambdaCoordinate : lambdaCoordinates)
+                    {
+                        do_cpt_real_err(serializer, &lambdaCoordinate.x);
+                        do_cpt_real_err(serializer, &lambdaCoordinate.v);
+                    }
+                    break;
+                default:
+                    gmx_fatal(FARGS,
+                              "Unknown constant-pH checkpoint entry %d\n"
+                              "You are probably reading a new checkpoint file with old code",
+                              i);
+            }
+        }
+    }
+    return ret;
+}
+
 void write_checkpoint_data(const std::filesystem::path&      filename,
                            CheckpointHeaderContents          headerContents,
                            gmx_bool                          bExpanded,
                            LambdaWeightCalculation           elamstats,
                            t_state*                          state,
+                           ConstantPH*                       constantPH,
                            ObservablesHistory*               observablesHistory,
                            const gmx::MDModulesNotifiers&    mdModulesNotifiers,
                            std::vector<gmx_file_position_t>* outputfiles,
@@ -2436,6 +2501,12 @@ void write_checkpoint_data(const std::filesystem::path&      filename,
                                       | enumValueToBitMask(StateAwhEntry::ForceCorrelationGrid));
     }
 
+    headerContents.flagsConstantpH = 0;
+    if (constantPH != nullptr)
+    {
+        headerContents.flagsConstantpH |= ((1 << eConstantpH_NUMBER) | (1 << eConstantpH_DATA));
+    }
+
     do_cpt_header(&serializer, FALSE, nullptr, &headerContents);
 
     if ((do_cpt_state(&serializer, state, nullptr) < 0)
@@ -2448,6 +2519,7 @@ void write_checkpoint_data(const std::filesystem::path&      filename,
             < 0)
         || (do_cpt_awh(&serializer, FALSE, headerContents.flags_awhh, state->awhHistory.get(), nullptr, CheckPointVersion::CurrentVersion)
             < 0)
+        || (doCptConstantpH(&serializer, FALSE, headerContents.flagsConstantpH, constantPH, nullptr) < 0)
         || (do_cpt_swapstate(
                     &serializer, FALSE, headerContents.eSwapCoords, observablesHistory->swapHistory.get(), nullptr)
             < 0)
@@ -2606,6 +2678,7 @@ static void read_checkpoint(const std::filesystem::path&   fn,
                             int*                           init_fep_state,
                             CheckpointHeaderContents*      headerContents,
                             t_state*                       state,
+                            ConstantPH*                    constantPH,
                             ObservablesHistory*            observablesHistory,
                             gmx_bool                       reproducibilityRequested,
                             const gmx::MDModulesNotifiers& mdModulesNotifiers,
@@ -2807,6 +2880,12 @@ static void read_checkpoint(const std::filesystem::path&   fn,
         cp_error();
     }
 
+    ret = doCptConstantpH(&serializer, TRUE, headerContents->flagsConstantpH, constantPH, nullptr);
+    if (ret)
+    {
+        cp_error();
+    }
+
     if (headerContents->eSwapCoords != SwapType::No && observablesHistory->swapHistory == nullptr)
     {
         observablesHistory->swapHistory = std::make_unique<swaphistory_t>(swaphistory_t{});
@@ -2842,6 +2921,7 @@ void load_checkpoint(const std::filesystem::path&   fn,
                      const gmx::MpiComm&            mpiCommSimulation,
                      t_inputrec*                    ir,
                      t_state*                       state,
+                     ConstantPH*                    constantPH,
                      ObservablesHistory*            observablesHistory,
                      gmx_bool                       reproducibilityRequested,
                      const gmx::MDModulesNotifiers& mdModulesNotifiers,
@@ -2859,6 +2939,7 @@ void load_checkpoint(const std::filesystem::path&   fn,
                         &(ir->fepvals->init_fep_state),
                         &headerContents,
                         state,
+                        constantPH,
                         observablesHistory,
                         reproducibilityRequested,
                         mdModulesNotifiers,
@@ -2976,6 +3057,13 @@ static CheckpointHeaderContents read_checkpoint_data(XdrSerializer*             
                      state->awhHistory.get(),
                      nullptr,
                      headerContents.file_version);
+    if (ret)
+    {
+        cp_error();
+    }
+
+    // Read (and discard into a temp) the constant-pH block to keep the file position aligned.
+    ret = doCptConstantpH(serializer, TRUE, headerContents.flagsConstantpH, nullptr, nullptr);
     if (ret)
     {
         cp_error();
@@ -3104,6 +3192,11 @@ void list_checkpoint(const std::filesystem::path& fn, FILE* out)
                          state.awhHistory.get(),
                          out,
                          headerContents.file_version);
+    }
+
+    if (ret == 0)
+    {
+        ret = doCptConstantpH(&serializer, TRUE, headerContents.flagsConstantpH, nullptr, out);
     }
 
     if (ret == 0)

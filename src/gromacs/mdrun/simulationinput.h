@@ -54,6 +54,7 @@
 struct t_fileio;
 struct t_inputrec;
 class t_state;
+class ConstantPH;
 struct ObservablesHistory;
 struct PartialDeserializedTprFile;
 
@@ -154,6 +155,7 @@ void applyLocalState(const SimulationInput&         simulationInput,
                      const MpiComm&                 mpiCommSimulation,
                      t_inputrec*                    ir,
                      t_state*                       state,
+                     ConstantPH*                    constantPH,
                      ObservablesHistory*            observablesHistory,
                      bool                           reproducibilityRequested,
                      const MDModulesNotifiers&      notifiers,

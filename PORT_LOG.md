@@ -74,7 +74,29 @@ Two bugs found+fixed reaching M1 (both silent zeros):
    (domdec/mdsetup.cpp): `fr->constantPH->updateAfterPartition(dd ? dd->ga2la.get() : nullptr,
    numHomeAtoms, fr->natoms_force)`.
 
-## Remaining (post-M1, per plan)
+## Post-M1 progress (commits 195ac78 → 505654d)
+- **Guard ✓** (195ac78): `pickNbnxnKernelCpu` auto-selects the plain-C 4x4 reference kernel when
+  `ir->lambda_dynamics` (SIMD kernels have no potential accumulation → would silently give 0).
+  Verified: 4x4 auto-selected without env var; dvdl matches oracle to 1e-4 (4x4-vs-1x1 FP noise).
+- **Per-step potential clear ✓** (195ac78): kerneldispatch.cpp clears out.potential each step (with the
+  force clear). M2 verified maxAbsDvdl stays constant across steps (no accumulation).
+- **M2 ✓** (e618116): port runs multi-step stably (dt=0.001, nstlist=1), clear verified.
+  (Full fork-trajectory M2 needs an equilibrated seed — ref_system.pdb blows up in real MD.)
+- **WP6 edr output + gmx cphmd ✓** (505654d): energyoutput printStepToEnergyFile writes the
+  enxCPHMD block (`cphmd->writeToEnergyFrame`); md.cpp passes constantph_ + do_cphmd gate;
+  legacymodules registers `gmx cphmd`. VERIFIED: port writes enxCPHMD (id=8, 46 subblocks) to .edr,
+  `gmx cphmd -dvdl` extracts all 46 groups matching oracle to 1e-4.
+
+## Remaining (production polish)
+- **Checkpoint (λ x,v)** — the one production-critical item left (chunked `-cpi` restarts, else λ
+  re-inits each chunk → wrong titration; workaround = one continuous mdrun/window, no chunking).
+  TRACTABLE: 2026 kept the XDR checkpoint (`do_cpt_int_err`/`do_cpt_real_err` via `XdrSerializer*`,
+  `CheckPointVersion` enum class). Port the fork's approach: add a `ConstantPH` value to
+  `CheckPointVersion`; add `doCptConstantpH(serializer, bRead, constantPH)` serializing each
+  `LambdaCoordinate` x,v; thread `constantPH` through `mdoutf_write_checkpoint`→`write_checkpoint_data`
+  (write) and `read_checkpoint`→runner `applyLocalState` (read, populate via `lambdaCoordinates()`).
+  Fork blueprint: `_portref/00_fork_vs_2021_all.diff` (checkpoint.cpp/.h, mdoutf.cpp/.h). Then validate:
+  run N steps → checkpoint → `-cpi` restart → λ continues (dvdl trajectory unbroken).
 - **WP5b** SIMD kernel (2026 rewrote it — no kernel_inner/outer.h; needs per-j potential scatter).
   Until done, run cph with `GMX_NBNXN_PLAINC_1X1=1` (reference kernel) or add a hard-fatal when
   lambda_dynamics + SIMD kernel selected.

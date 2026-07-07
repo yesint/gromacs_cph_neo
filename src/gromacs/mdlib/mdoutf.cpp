@@ -118,6 +118,7 @@ struct gmx_mdoutf
     const gmx::MDModulesNotifiers* mdModulesNotifiers;
     bool                           simulationsShareState;
     MPI_Comm                       mainRanksComm;
+    ConstantPH*                    constantph; //!< Constant-pH data for checkpointing (or nullptr).
 };
 
 
@@ -151,6 +152,7 @@ gmx_mdoutf_t init_mdoutf(FILE*                          fplog,
     of->tng_low_prec = nullptr;
     of->h5md         = nullptr;
     of->fp_dhdl      = nullptr;
+    of->constantph   = nullptr;
 
     of->eIntegrator             = ir->eI;
     of->bExpanded               = ir->bExpanded;
@@ -303,6 +305,11 @@ gmx_wallcycle* mdoutf_get_wcycle(gmx_mdoutf_t of)
     return of->wcycle;
 }
 
+void mdoutf_set_constantph(gmx_mdoutf_t of, ConstantPH* constantph)
+{
+    of->constantph = constantph;
+}
+
 static void mpiBarrierBeforeRename(const bool applyMpiBarrierBeforeRename, MPI_Comm mpiBarrierCommunicator)
 {
     if (applyMpiBarrierBeforeRename)
@@ -333,6 +340,7 @@ static void write_checkpoint(const char*                     fn,
                              int64_t                         step,
                              double                          t,
                              t_state*                        state,
+                             ConstantPH*                     constantph,
                              ObservablesHistory*             observablesHistory,
                              const gmx::MDModulesNotifiers&  mdModulesNotifiers,
                              gmx::WriteCheckpointDataHolder* modularSimulatorCheckpointData,
@@ -421,6 +429,7 @@ static void write_checkpoint(const char*                     fn,
                                                 0,
                                                 0,
                                                 0,
+                                                0, // flagsConstantpH (set later in write_checkpoint_data)
                                                 nED,
                                                 eSwapCoords,
                                                 false };
@@ -437,6 +446,7 @@ static void write_checkpoint(const char*                     fn,
                           bExpanded,
                           elamstats,
                           state,
+                          constantph,
                           observablesHistory,
                           mdModulesNotifiers,
                           &outputfiles,
@@ -571,6 +581,7 @@ void mdoutf_write_checkpoint(gmx_mdoutf_t                    of,
                      step,
                      t,
                      state_global,
+                     of->constantph,
                      observablesHistory,
                      *(of->mdModulesNotifiers),
                      modularSimulatorCheckpointData,

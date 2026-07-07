@@ -1254,6 +1254,16 @@ int Mdrunner::mdrunner()
 
     ObservablesHistory observablesHistory = {};
 
+    // Constant-pH (lambda dynamics): create ConstantPH BEFORE the checkpoint read below, so a
+    // restart can populate its lambda coordinates. The commrec does not exist yet here; ConstantPH
+    // only uses it for multi-rank MPI reductions (guarded by commrec_ != nullptr), and the cph use
+    // case is single-rank per window, so passing nullptr is safe.
+    std::unique_ptr<ConstantPH> constantPH;
+    if (inputrec->lambda_dynamics)
+    {
+        constantPH = std::make_unique<ConstantPH>(*inputrec, mtop.natoms, nullptr, mdlog);
+    }
+
     auto modularSimulatorCheckpointData = std::make_unique<ReadCheckpointDataHolder>();
     if (startingBehavior != StartingBehavior::NewSimulation)
     {
@@ -1276,6 +1286,7 @@ int Mdrunner::mdrunner()
                         mpiCommSimulation,
                         inputrec.get(),
                         globalState.get(),
+                        constantPH.get(),
                         &observablesHistory,
                         mdrunOptions.reproducible,
                         mdModules_->notifiers(),
@@ -1576,15 +1587,6 @@ int Mdrunner::mdrunner()
     }
 
     t_commrec* cr = commRec.get();
-
-    // Constant-pH (lambda dynamics): create the ConstantPH object once the commrec
-    // exists. Separate PME ranks are not (yet) supported; single-rank / PP+PME on the
-    // same rank (the CPU-NB cph use case) is fine.
-    std::unique_ptr<ConstantPH> constantPH;
-    if (inputrec->lambda_dynamics)
-    {
-        constantPH = std::make_unique<ConstantPH>(*inputrec, mtop.natoms, cr, mdlog);
-    }
 
     // Ensure that all atoms within the same update group are in the
     // same periodic image. Otherwise, a simulation that did not use

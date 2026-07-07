@@ -43,6 +43,7 @@
 #include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/vectypes.h"
 
+class ConstantPH;
 class energyhistory_t;
 struct gmx_mtop_t;
 struct gmx_multisim_t;
@@ -92,6 +93,9 @@ FILE* mdoutf_get_fp_dhdl(gmx_mdoutf_t of);
 
 /*! \brief Getter for wallcycle timer */
 gmx_wallcycle* mdoutf_get_wcycle(gmx_mdoutf_t of);
+
+/*! \brief Setter for the constant-pH data used when writing checkpoints. */
+void mdoutf_set_constantph(gmx_mdoutf_t of, ConstantPH* constantph);
 
 /*! \brief Close TNG files if they are open.
  *

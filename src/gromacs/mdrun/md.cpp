@@ -340,6 +340,8 @@ void gmx::LegacySimulator::do_md()
                                    startingBehavior_,
                                    simulationsShareState,
                                    ms_);
+    // Constant-pH: register the lambda-dynamics data for checkpoint writing.
+    mdoutf_set_constantph(outf, constantph_);
     gmx::EnergyOutput energyOutput(mdoutf_get_fp_ene(outf),
                                    topGlobal_,
                                    *ir,

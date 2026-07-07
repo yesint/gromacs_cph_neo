@@ -56,6 +56,7 @@ struct t_fileio;
 struct t_inputrec;
 class t_state;
 struct t_trxframe;
+class ConstantPH;
 enum class IntegrationAlgorithm : int;
 enum class SwapType : int;
 enum class LambdaWeightCalculation : int;
@@ -195,6 +196,8 @@ enum class CheckPointVersion : int
     ModularSimulator,
     //! Added local (per walker) weight contribution to each point in AWH.
     AwhLocalWeightSum,
+    //! Added checkpointing for constant pH (lambda dynamics) coordinates.
+    ConstantPH,
     //! The total number of checkpoint versions.
     Count,
     //! Current version
@@ -273,6 +276,8 @@ struct CheckpointHeaderContents
     int flags_dfh;
     //! Flags for AWH history.
     int flags_awhh;
+    //! Flags for constant-pH (lambda dynamics) checkpoint data.
+    int flagsConstantpH = 0;
     //! Essential dynamics states.
     int nED;
     //! Enum for coordinate swapping.
@@ -287,6 +292,7 @@ void write_checkpoint_data(const std::filesystem::path&      filename,
                            gmx_bool                          bExpanded,
                            LambdaWeightCalculation           elamstats,
                            t_state*                          state,
+                           ConstantPH*                       constantPH,
                            ObservablesHistory*               observablesHistory,
                            const gmx::MDModulesNotifiers&    mdModulesNotifiers,
                            std::vector<gmx_file_position_t>* outputfiles,
@@ -304,6 +310,7 @@ void load_checkpoint(const std::filesystem::path&   fn,
                      const gmx::MpiComm&            mpiCommSimulation,
                      t_inputrec*                    ir,
                      t_state*                       state,
+                     ConstantPH*                    constantPH,
                      ObservablesHistory*            observablesHistory,
                      gmx_bool                       reproducibilityRequested,
                      const gmx::MDModulesNotifiers& mdModulesNotifiers,
