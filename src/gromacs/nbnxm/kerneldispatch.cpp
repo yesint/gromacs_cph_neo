@@ -264,6 +264,13 @@ static void nbnxn_kernel_cpu(const PairlistSet&             pairlistSet,
             nbat->clearForceBuffer(nb);
 
             clear_fshift(out.fshift.data());
+
+            // Constant-pH: clear the per-atom electrostatic potential accumulator each step,
+            // otherwise it would sum across steps.
+            if (GMX_COMPUTE_ELECTROSTATIC_POTENTIAL && !out.potential.empty())
+            {
+                std::fill(out.potential.begin(), out.potential.end(), real(0));
+            }
         }
 
         if (nb == 0)
