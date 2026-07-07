@@ -57,6 +57,7 @@
 #include <sys/types.h>
 
 #include "gromacs/applied_forces/awh/read_params.h"
+#include "gromacs/applied_forces/constant_ph/update_topology_charges.h"
 #include "gromacs/commandline/filenm.h"
 #include "gromacs/commandline/pargs.h"
 #include "gromacs/ewald/ewald_utils.h"
@@ -2581,6 +2582,13 @@ int gmx_grompp(int argc, char* argv[])
         GMX_LOG(logger.info).asParagraph().appendTextFormatted("initialising group options...");
     }
     do_index(mdparin, ftp2path_optional(efNDX, NFILE, fnm), &sys, bVerbose, mdModules.notifiers(), ir, &wi);
+
+    // Now that we have the temperature(s) set in inputrec, we can update the
+    // charges in the topology for constant-pH (which needs the temperature).
+    if (ir->lambda_dynamics)
+    {
+        gmx::updateTopologyChargerForConstantPH(&sys, *ir);
+    }
 
     // Notify topology to MdModules for pre-processing after all indexes were built
     mdModules.notifiers().preProcessingNotifier_.notify(&sys);

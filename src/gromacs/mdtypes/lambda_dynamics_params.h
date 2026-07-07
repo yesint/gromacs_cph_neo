@@ -58,6 +58,7 @@
 struct t_blocka;
 struct t_inpfile;
 struct t_inputrec;
+struct IndexGroup;
 
 //! Constant-pH port: warninp_t is the modern WarningHandler pointer in 2026.
 class WarningHandler;
@@ -262,7 +263,7 @@ public:
     LambdaDynamicsAtomCollection& operator=(const LambdaDynamicsAtomCollection&) = delete;
 
     //! Set up the correct atom indices from the index group name.
-    void setAtomIndices(const t_blocka* grps, char** gnames, warninp_t wi);
+    void setAtomIndices(ArrayRef<const IndexGroup> indexGroups, warninp_t wi);
 
     //! Write datastructure to serializer
     void serialize(ISerializer* serializer);

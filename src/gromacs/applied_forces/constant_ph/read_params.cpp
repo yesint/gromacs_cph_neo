@@ -360,21 +360,30 @@ LambdaDynamicsAtomCollection::LambdaDynamicsAtomCollection(std::vector<t_inpfile
     }
 }
 
-void LambdaDynamicsAtomCollection::setAtomIndices(const t_blocka* grps, char** gnames, warninp_t wi)
+void LambdaDynamicsAtomCollection::setAtomIndices(ArrayRef<const IndexGroup> indexGroups, warninp_t wi)
 {
-    int indexGroupIndex    = find_group(indexGroupName_.c_str(), grps->nr, gnames);
-    int numCollectionAtoms = grps->index[indexGroupIndex + 1] - grps->index[indexGroupIndex];
-
-    if (numCollectionAtoms == 0)
+    // 2026 represents index groups as a list of IndexGroup{name, particleIndices},
+    // replacing the old t_blocka/gnames pair.
+    int gid = -1;
+    for (int i = 0; i < ssize(indexGroups); i++)
     {
-        warning_error(
-                wi, gmx::formatString("No atoms found for index group %s", indexGroupName_.c_str()).c_str());
+        if (gmx_strcasecmp(indexGroupName_.c_str(), indexGroups[i].name.c_str()) == 0)
+        {
+            gid = i;
+            break;
+        }
     }
-    atomIndicies_.reserve(numCollectionAtoms);
-    for (int i = 0; i < numCollectionAtoms; i++)
+    if (gid < 0)
     {
-        atomIndicies_.emplace_back(grps->a[grps->index[indexGroupIndex] + i]);
+        warning_error(wi, formatString("No index group named %s found", indexGroupName_.c_str()));
+        return;
     }
+    const auto& particleIndices = indexGroups[gid].particleIndices;
+    if (particleIndices.empty())
+    {
+        warning_error(wi, formatString("No atoms found for index group %s", indexGroupName_.c_str()));
+    }
+    atomIndicies_.assign(particleIndices.begin(), particleIndices.end());
 }
 
 LambdaDynamicsAtomCollection::LambdaDynamicsAtomCollection(ISerializer* serializer)

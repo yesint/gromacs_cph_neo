@@ -70,6 +70,7 @@
 #include "gromacs/mdtypes/awh_history.h"
 #include "gromacs/mdtypes/awh_params.h"
 #include "gromacs/mdtypes/inputrec.h"
+#include "gromacs/mdtypes/lambda_dynamics_params.h"
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/multipletimestepping.h"
 #include "gromacs/mdtypes/pull_params.h"
@@ -200,6 +201,7 @@ enum tpxv
     tpxv_InputHistogramCounts, /**< Provide input histogram counts for current expanded ensemble state */
     tpxv_NNPotIFuncType,       /**< Add interaction function type for neural network potential */
     tpxv_AwhHistogramTolerance, /**< Add AWH histogram tolerance */
+    tpxv_ConstantpH,            /**< Added constant pH (lambda dynamics) */
     tpxv_Count                  /**< the total number of tpxv versions */
 };
 
@@ -1558,6 +1560,24 @@ static void do_inputrec(gmx::ISerializer* serializer, t_inputrec* ir, int file_v
     serializer->doReal(&ir->userreal2);
     serializer->doReal(&ir->userreal3);
     serializer->doReal(&ir->userreal4);
+
+    if (file_version >= tpxv_ConstantpH)
+    {
+        /* For constant pH with lambda dynamics */
+        serializer->doBool(&ir->lambda_dynamics);
+        if (ir->lambda_dynamics)
+        {
+            if (serializer->reading())
+            {
+                ir->lambdaDynamicsSimulationParameters =
+                        std::make_unique<gmx::LambdaDynamicsSimulationParameters>(serializer);
+            }
+            else
+            {
+                ir->lambdaDynamicsSimulationParameters->serialize(serializer);
+            }
+        }
+    }
 
     /* AdResS is removed, but we need to be able to read old files,
        and let mdrun refuse to run them */

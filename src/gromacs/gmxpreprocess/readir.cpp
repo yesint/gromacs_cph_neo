@@ -52,6 +52,7 @@
 #include <string_view>
 
 #include "gromacs/applied_forces/awh/read_params.h"
+#include "gromacs/applied_forces/constant_ph/read_params.h"
 #include "gromacs/fileio/readinp.h"
 #include "gromacs/fileio/warninp.h"
 #include "gromacs/gmxlib/network.h"
@@ -66,6 +67,7 @@
 #include "gromacs/mdrunutility/mdmodulesnotifiers.h"
 #include "gromacs/mdtypes/awh_params.h"
 #include "gromacs/mdtypes/inputrec.h"
+#include "gromacs/mdtypes/lambda_dynamics_params.h"
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/multipletimestepping.h"
 #include "gromacs/mdtypes/pull_params.h"
@@ -2717,6 +2719,22 @@ void get_ir(const char*     mdparin,
     fep->dh_hist_size            = get_eint(&inp, "dh_hist_size", 0, wi);
     fep->dh_hist_spacing         = get_ereal(&inp, "dh_hist_spacing", 0.1, wi);
 
+    /* For constant pH with lambda dynamics */
+    printStringNewline(&inp, "Constant pH lambda dynamics");
+    ir->lambda_dynamics = (getEnum<Boolean>(&inp, "lambda-dynamics", wi) != Boolean::No);
+    if (ir->lambda_dynamics)
+    {
+        if (ir->eI != IntegrationAlgorithm::MD)
+        {
+            wi->addWarning(
+                    "cpHMD currently only works with the leap frog (MD) integrator. If a different "
+                    "integrator is used, the cpHMD charges will be set (helpful for energy "
+                    "minimization), but the lambda-coordinates will not be updated.");
+        }
+        ir->lambdaDynamicsSimulationParameters =
+                std::make_unique<gmx::LambdaDynamicsSimulationParameters>(&inp, wi);
+    }
+
     /* Non-equilibrium MD stuff */
     printStringNewline(&inp, "Non-equilibrium MD stuff");
     setStringEntry(&inp, "acc-grps", inputrecStrings->accelerationGroups, nullptr);
@@ -4373,6 +4391,16 @@ void do_index(const char*                                 mdparin,
         make_IMD_group(ir->imd, inputrecStrings->imd_grp, defaultIndexGroups);
     }
 
+    /* Process lambda dynamics (constant pH) atom collections from index groups */
+    if (ir->lambda_dynamics)
+    {
+        for (auto& lambdaDynamicsAtomCollection :
+             ir->lambdaDynamicsSimulationParameters->lambdaAtomsCollections())
+        {
+            lambdaDynamicsAtomCollection.setAtomIndices(defaultIndexGroups, wi);
+        }
+    }
+
     gmx::IndexGroupsAndNames defaultIndexGroupsAndNames(defaultIndexGroups);
     mdModulesNotifiers.preProcessingNotifier_.notify(defaultIndexGroupsAndNames);
 
@@ -5325,6 +5353,10 @@ void triple_check(const char* mdparin, const t_inputrec& ir, const gmx_mtop_t& s
     }
 
     check_disre(sys);
+    if (ir.lambda_dynamics)
+    {
+        gmx::checkLambdaParams(*ir.lambdaDynamicsSimulationParameters, wi);
+    }
 }
 
 void double_check(t_inputrec* ir, matrix box, bool bHasNormalConstraints, bool bHasAnyConstraints, WarningHandler* wi)
