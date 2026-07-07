@@ -1313,6 +1313,16 @@ void gmx::LegacySimulator::do_md()
                         std::fprintf(fpd, "%3d  %12.5f\n", ++gi, lc.dvdl_pot);
                     }
                     std::fclose(fpd);
+                    // Per-step trajectory (max|dvdl_pot| and first group's lambda) for the M2 check.
+                    FILE* fpt = std::fopen("cph_port_traj.dat", "a");
+                    real  mx  = 0;
+                    for (const auto& lc : constantph_->lambdaCoordinates())
+                    {
+                        mx = std::max(mx, std::abs(lc.dvdl_pot));
+                    }
+                    std::fprintf(fpt, "step %ld  maxAbsDvdl %.5f  lambda1 %.5f\n", long(step),
+                                 mx, constantph_->lambdaCoordinates()[0].x);
+                    std::fclose(fpt);
                 }
             }
 
