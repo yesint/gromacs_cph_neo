@@ -40,7 +40,17 @@ Verify with `ldd build-cpu/bin/gmx | grep libgromacs` → must point into build-
   t_forcerec fields, tpxv_ConstantpH. (Remaining WP2: cptv_ConstantpH checkpoint enum, ewcCONSTANTPH
   wallcycle — needed by WP4/WP6.)
 - **WP3 ✓** (commit f8b3bdb) — **port grompps the cph system: 46 lambda coordinates, charges baked.**
-- **WP4 (do_md hooks)** — NEXT. Thread ConstantPH* into LegacySimulator::do_md; hooks: setLambdaCharges
-  before do_force, updateLambdas after update (F_EPOT/F_EKIN/lambda_therm_integral), output gate.
-  Needs ewcCONSTANTPH + creating ConstantPH in runner/simulatorbuilder. 2026 do_md heavily refactored.
-- **WP5a (force path)** + **M1** after WP4.
+- **WP4 ✓** (commit 0252d8f) — **port RUNS cph end-to-end**: `mdrun -nsteps 0 -nb cpu` exit 0, 46 λ
+  coords, legacy simulator forced, hooks fire. `GMX_CPH_DUMP_DVDL=1` → `cph_port_dvdl.dat` (per-coord
+  `dvdl_pot`). Currently all 0.0 — CORRECT: NB kernel doesn't fill the potential buffer yet (= WP5a).
+- **WP5a (force path)** — IN PROGRESS. 2026 reference kernel is structurally close to the fork's 2021
+  (CALC_COUL_RF, `fcoul=qq*(interact*rinv*rinvsq-k_rf2)`, `out->Vc`, `Vc_sub_self`, `do_self` all present),
+  so the fork diffs in `_portref` port with adaptation (HostVector not FastVector). Components:
+  (1) kernel_common.h `#define GMX_COMPUTE_ELECTROSTATIC_POTENTIAL 1`; (2) atomdata.h `HostVector<real>
+  potential` in nbnxn_atomdata_output_t; (3) atomdata.cpp resize + reduceElectrostaticPotential;
+  (4) kernel_common.cpp clear; (5) kernel_ref_outer.h `potential=out->potential.data()` + self-term
+  `potential[i]-=qi[i]*2*Vc_sub_self`; (6) kernel_ref_inner.h coulFuncValue/pcoul + `potential[i]+=q[j]*pcoul`;
+  (7) sim_util.cpp per-step setAtomCharges re-push + reduce (!useGpu) → copy to fr->electrostaticPotential;
+  (8) forcerec.cpp `bHaveQ |= lambda_dynamics`; (9) nbnxm.{cpp,h} reduce entry point.
+- **M1**: after WP5a, `GMX_CPH_DUMP_DVDL=1 GMX_NBNXN_PLAINC_1X1=1 mdrun -nsteps 0 -nb cpu` on port_sp.tpr;
+  compare cph_port_dvdl.dat to oracle_ref/M1_oracle_dvdl.txt (≤1e-4).

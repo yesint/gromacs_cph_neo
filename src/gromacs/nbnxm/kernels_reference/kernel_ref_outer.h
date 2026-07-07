@@ -120,6 +120,10 @@ void
     real* Vc = out->Vc.data();
 #    endif
 #endif
+#if GMX_COMPUTE_ELECTROSTATIC_POTENTIAL && HAVE_ELECTROSTATICS
+    /* Constant-pH: per-atom electrostatic potential accumulator. */
+    real* potential = out->potential.data();
+#endif
 
     real xi[UNROLLI * XI_STRIDE];
     real fi[UNROLLI * FI_STRIDE];
@@ -154,14 +158,14 @@ void
 
 #ifdef CALC_COUL_RF
     const real k_rf2 = 2 * ic.coulomb.reactionFieldCoefficient;
-#    ifdef CALC_ENERGIES
+#    if defined CALC_ENERGIES || GMX_COMPUTE_ELECTROSTATIC_POTENTIAL
     const real reactionFieldCoefficient = ic.coulomb.reactionFieldCoefficient;
     const real reactionFieldShift       = ic.coulomb.reactionFieldShift;
 #    endif
 #endif
 #ifdef CALC_COUL_TAB
     const real tab_coul_scale = ic.coulombEwaldTables->scale;
-#    ifdef CALC_ENERGIES
+#    if defined CALC_ENERGIES || GMX_COMPUTE_ELECTROSTATIC_POTENTIAL
     const real halfsp = 0.5 / tab_coul_scale;
 #    endif
 
@@ -169,7 +173,7 @@ void
     const real* tab_coul_FDV0 = ic.coulombEwaldTables->tableFDV0.data();
 #    else
     const real* tab_coul_F = ic.coulombEwaldTables->tableF.data();
-#        ifdef CALC_ENERGIES
+#        if defined CALC_ENERGIES || GMX_COMPUTE_ELECTROSTATIC_POTENTIAL
     const real* tab_coul_V = ic.coulombEwaldTables->tableV.data();
 #        endif
 #    endif
@@ -216,15 +220,15 @@ void
         const bool do_coul = ((ciEntry.shift & NBNXN_CI_DO_COUL(0)) != 0);
         const bool half_LJ = (((ciEntry.shift & NBNXN_CI_HALF_LJ(0)) != 0) || !do_LJ) && do_coul;
 #endif
-#ifdef CALC_ENERGIES
-
+#if defined CALC_ENERGIES || GMX_COMPUTE_ELECTROSTATIC_POTENTIAL
 #    ifdef LJ_EWALD
         const bool do_self = true;
 #    elif HAVE_ELECTROSTATICS
         const bool do_self = do_coul;
 #    endif
+#endif
 
-
+#ifdef CALC_ENERGIES
 #    ifndef ENERGY_GROUPS
         real Vvdw_ci = 0;
 #        if HAVE_ELECTROSTATICS
@@ -252,17 +256,17 @@ void
 #endif
         }
 
-#if defined CALC_ENERGIES && (HAVE_ELECTROSTATICS || defined LJ_EWALD)
+#if (defined CALC_ENERGIES || GMX_COMPUTE_ELECTROSTATIC_POTENTIAL) && (HAVE_ELECTROSTATICS || defined LJ_EWALD)
         if (do_self)
         {
 #    ifdef CALC_COUL_RF
-            const real Vc_sub_self = 0.5 * reactionFieldShift;
+            const real gmx_unused Vc_sub_self = 0.5 * reactionFieldShift;
 #    endif
 #    ifdef CALC_COUL_TAB
 #        if GMX_DOUBLE
-            const real Vc_sub_self = 0.5 * tab_coul_V[0];
+            const real gmx_unused Vc_sub_self = 0.5 * tab_coul_V[0];
 #        else
-            const real Vc_sub_self = 0.5 * tab_coul_FDV0[2];
+            const real gmx_unused Vc_sub_self = 0.5 * tab_coul_FDV0[2];
 #        endif
 #    endif
 
@@ -270,29 +274,36 @@ void
             {
                 for (int i = 0; i < UNROLLI; i++)
                 {
-#    ifdef ENERGY_GROUPS
+#    ifdef CALC_ENERGIES
+#        ifdef ENERGY_GROUPS
                     const int egp_ind =
                             egp_sh_i[i] + nbatParams.energyGroupsPerCluster->getEnergyGroup(ci, i);
-#    else
+#        else
                     const int egp_ind = 0;
-#    endif
+#        endif
 
-#    if HAVE_ELECTROSTATICS
+#        if HAVE_ELECTROSTATICS
                     /* Coulomb self interaction */
                     Vc[egp_ind] -= qi[i] * q[ci * UNROLLI + i] * Vc_sub_self;
-#    endif
+#        endif
 
-#    ifdef LJ_EWALD
+#        ifdef LJ_EWALD
                     /* LJ Ewald self interaction */
                     Vvdw[egp_ind] +=
                             0.5
                             * nbatParams.nbfp[nbatParams.type[ci * UNROLLI + i] * (nbatParams.numTypes + 1) * 2]
                             / 6 * lje_coeff6_6;
+#        endif
+#    endif /* CALC_ENERGIES */
+
+#    if GMX_COMPUTE_ELECTROSTATIC_POTENTIAL && HAVE_ELECTROSTATICS
+                    /* Constant-pH: electrostatic potential self-term */
+                    potential[ci * UNROLLI + i] -= qi[i] * 2 * Vc_sub_self;
 #    endif
                 }
             }
         }
-#endif /* CALC_ENERGIES */
+#endif /* CALC_ENERGIES || GMX_COMPUTE_ELECTROSTATIC_POTENTIAL */
 
         // Without loop vectorization we first loop over all pairs with exclusions and then loop
         // over the remaining pairs without exclusion without checking for exclusions

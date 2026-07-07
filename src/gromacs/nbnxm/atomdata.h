@@ -130,6 +130,8 @@ struct nbnxn_atomdata_output_t
     HostVector<real> Vvdw;
     //! Temporary Coulomb group energy storage
     HostVector<real> Vc;
+    //! Constant-pH: per-atom electrostatic potential accumulator, size natoms (fstride-independent)
+    HostVector<real> potential;
 
     //! Accumulator for energy output with a single energy group
     std::unique_ptr<EnergyAccumulator<false, true>> accumulatorSingleEnergies;

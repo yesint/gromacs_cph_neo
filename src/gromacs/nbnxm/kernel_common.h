@@ -53,6 +53,10 @@
 #include "pairlist.h"
 
 struct interaction_const_t;
+
+// Constant-pH: hard-coded switch enabling per-atom electrostatic potential accumulation
+// (the dV/dlambda driving force) in the CPU non-bonded kernels.
+#define GMX_COMPUTE_ELECTROSTATIC_POTENTIAL 1
 enum class CoulombInteractionType : int;
 enum class VanDerWaalsType : int;
 enum class InteractionModifiers : int;

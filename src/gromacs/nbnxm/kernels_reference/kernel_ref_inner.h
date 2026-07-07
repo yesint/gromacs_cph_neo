@@ -39,6 +39,11 @@
 #    define EXCL_FORCES
 #endif
 
+/* Constant-pH: accumulate the per-atom electrostatic potential when requested. */
+#if defined GMX_COMPUTE_ELECTROSTATIC_POTENTIAL && defined CALC_COULOMB
+#    define CALC_ELEC_POTENTIAL
+#endif
+
 {
     const int cj = l_cj[cjind].cj;
 
@@ -257,8 +262,8 @@
 #    ifdef CALC_COUL_RF
             real fcoul = qq * (interact * rinv * rinvsq - k_rf2);
             /* 4 flops for RF force */
-#        ifdef CALC_ENERGIES
-            real vcoul = qq * (interact * rinv + reactionFieldCoefficient * rsq - reactionFieldShift);
+#        if defined CALC_ENERGIES || defined CALC_ELEC_POTENTIAL
+            const real coulFuncValue = interact * rinv + reactionFieldCoefficient * rsq - reactionFieldShift;
             /* 4 flops for RF energy */
 #        endif
 #    endif
@@ -276,29 +281,33 @@
 #        endif
             real fcoul = interact * rinvsq - fexcl;
             /* 7 flops for float 1/r-table force */
-#        ifdef CALC_ENERGIES
+#        if defined CALC_ENERGIES || defined CALC_ELEC_POTENTIAL
 #            if !GMX_DOUBLE
-            real vcoul =
-                    qq
-                    * (interact * (rinv - ic.coulomb.ewaldShift)
-                       - (tab_coul_FDV0[ri * 4 + 2] - halfsp * frac * (tab_coul_FDV0[ri * 4] + fexcl)));
+            const real coulFuncValue =
+                    interact * (rinv - ic.coulomb.ewaldShift)
+                    - (tab_coul_FDV0[ri * 4 + 2] - halfsp * frac * (tab_coul_FDV0[ri * 4] + fexcl));
             /* 7 flops for float 1/r-table energy (8 with excls) */
 #            else
-            real vcoul = qq
-                         * (interact * (rinv - ic.coulomb.ewaldShift)
-                            - (tab_coul_V[ri] - halfsp * frac * (tab_coul_F[ri] + fexcl)));
+            const real coulFuncValue =
+                    interact * (rinv - ic.coulomb.ewaldShift)
+                    - (tab_coul_V[ri] - halfsp * frac * (tab_coul_F[ri] + fexcl));
 #            endif
 #        endif
             fcoul *= qq * rinv;
 #    endif
 
 #    ifdef CALC_ENERGIES
+            const real vcoul = qq * coulFuncValue;
+            /* 1 flop for Coulomb charge factor */
 #        ifdef ENERGY_GROUPS
             Vc[egp_sh_i[i] + egpJ] += vcoul;
 #        else
             Vc_ci += vcoul;
             /* 1 flop for Coulomb energy addition */
 #        endif
+#    endif
+#    ifdef CALC_ELEC_POTENTIAL
+            const real pcoul = skipmask * coulFuncValue;
 #    endif
 #endif
 
@@ -325,9 +334,17 @@
             f[aj * F_STRIDE + YY] -= fy;
             f[aj * F_STRIDE + ZZ] -= fz;
             /* 9 flops for force addition */
+
+#ifdef CALC_ELEC_POTENTIAL
+            /* Constant-pH: accumulate the electrostatic potential at each atom
+             * (V_i = sum_j facel*q_j*coulFunc), the dV/dlambda driving force. */
+            potential[ci * UNROLLI + i] += facel * q[aj] * pcoul;
+            potential[aj] += qi[i] * pcoul;
+#endif
         }
     }
 }
 
 #undef interact
 #undef EXCL_FORCES
+#undef CALC_ELEC_POTENTIAL

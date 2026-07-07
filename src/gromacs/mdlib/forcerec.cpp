@@ -215,7 +215,7 @@ enum class ConstraintTypeForAtom : int
 };
 
 static std::vector<gmx::AtomInfoWithinMoleculeBlock>
-makeAtomInfoForEachMoleculeBlock(const gmx_mtop_t& mtop, const t_forcerec* fr)
+makeAtomInfoForEachMoleculeBlock(const gmx_mtop_t& mtop, const t_forcerec* fr, const bool disableNeutralAtomOptimization)
 {
     std::vector<bool> atomUsesVdw(fr->ntype, false);
     for (int ai = 0; ai < fr->ntype; ai++)
@@ -311,7 +311,7 @@ makeAtomInfoForEachMoleculeBlock(const gmx_mtop_t& mtop, const t_forcerec* fr)
                 atomInfo = (atomInfo & ~gmx::sc_atomInfo_EnergyGroupIdMask) | gid;
 
                 bool bHaveVDW = (atomUsesVdw[atom.type] || atomUsesVdw[atom.typeB]);
-                bool bHaveQ   = (atom.q != 0 || atom.qB != 0);
+                bool bHaveQ   = (atom.q != 0 || atom.qB != 0 || disableNeutralAtomOptimization);
 
                 bool haveExclusions = false;
                 /* Loop over all the exclusions of atom ai */
@@ -1107,7 +1107,10 @@ void init_forcerec(FILE*                            fplog,
     }
 
     /* Set all the static charge group info */
-    forcerec->atomInfoForEachMoleculeBlock = makeAtomInfoForEachMoleculeBlock(mtop, forcerec);
+    // Constant-pH: keep neutral-state titratable beads in the pairlist so the kernel
+    // still accumulates their electrostatic potential (needed for dV/dlambda).
+    forcerec->atomInfoForEachMoleculeBlock =
+            makeAtomInfoForEachMoleculeBlock(mtop, forcerec, inputrec.lambda_dynamics);
     if (!haveDDAtomOrdering(*commrec))
     {
         forcerec->atomInfo = expandAtomInfo(mtop.molblock.size(), forcerec->atomInfoForEachMoleculeBlock);

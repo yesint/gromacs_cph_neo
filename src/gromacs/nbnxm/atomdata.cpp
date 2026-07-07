@@ -36,6 +36,8 @@
 
 #include "atomdata.h"
 
+#include "kernel_common.h"
+
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -109,6 +111,12 @@ void nbnxn_atomdata_t::resizeForceBuffers()
     for (nbnxn_atomdata_output_t& outputBuffer : outputBuffers_)
     {
         outputBuffer.f.resize(paddedSize * fstride);
+
+        if (GMX_COMPUTE_ELECTROSTATIC_POTENTIAL)
+        {
+            // Constant-pH: one electrostatic potential entry per atom.
+            outputBuffer.potential.resize(paddedSize);
+        }
     }
 }
 
@@ -119,7 +127,8 @@ nbnxn_atomdata_output_t::nbnxn_atomdata_output_t(NbnxmKernelType kernelType,
     f({}, { pinningPolicy }),
     fshift({}, { pinningPolicy }),
     Vvdw({}, { pinningPolicy }),
-    Vc({}, { pinningPolicy })
+    Vc({}, { pinningPolicy }),
+    potential({}, { pinningPolicy })
 {
     fshift.resize(c_numShiftVectors * DIM);
     Vvdw.resize(numEnergyGroups * numEnergyGroups);
