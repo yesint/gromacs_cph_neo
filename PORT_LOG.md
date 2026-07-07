@@ -87,16 +87,44 @@ Two bugs found+fixed reaching M1 (both silent zeros):
   legacymodules registers `gmx cphmd`. VERIFIED: port writes enxCPHMD (id=8, 46 subblocks) to .edr,
   `gmx cphmd -dvdl` extracts all 46 groups matching oracle to 1e-4.
 
-## Remaining (production polish)
-- **Checkpoint (λ x,v)** — the one production-critical item left (chunked `-cpi` restarts, else λ
-  re-inits each chunk → wrong titration; workaround = one continuous mdrun/window, no chunking).
-  TRACTABLE: 2026 kept the XDR checkpoint (`do_cpt_int_err`/`do_cpt_real_err` via `XdrSerializer*`,
-  `CheckPointVersion` enum class). Port the fork's approach: add a `ConstantPH` value to
-  `CheckPointVersion`; add `doCptConstantpH(serializer, bRead, constantPH)` serializing each
-  `LambdaCoordinate` x,v; thread `constantPH` through `mdoutf_write_checkpoint`→`write_checkpoint_data`
-  (write) and `read_checkpoint`→runner `applyLocalState` (read, populate via `lambdaCoordinates()`).
-  Fork blueprint: `_portref/00_fork_vs_2021_all.diff` (checkpoint.cpp/.h, mdoutf.cpp/.h). Then validate:
-  run N steps → checkpoint → `-cpi` restart → λ continues (dvdl trajectory unbroken).
+## Checkpoint ✓ (commit bb4b5b0) — λ x,v persist across `-cpi` restarts
+`CheckPointVersion::ConstantPH` + `CheckpointHeaderContents.flagsConstantpH` + `doCptConstantpH`
+(serializes each LambdaCoordinate x,v). Threaded: write = mdoutf (gmx_mdoutf stores constantph via
+`mdoutf_set_constantph`, called in do_md) → static write_checkpoint → write_checkpoint_data; read =
+runner (ConstantPH created BEFORE applyLocalState, nullptr commrec — single-rank) → applyLocalState →
+load_checkpoint → read_checkpoint. Also read-to-advance in read_checkpoint_data + list_checkpoint (block
+alignment). VALIDATED: restart λ trajectory matches the continuous-run reference (unbroken).
+
+## THE PORT IS PRODUCTION-COMPLETE (single-rank per window)
+grompp ✓, multi-step MD ✓ (M1 5e-5 vs fork, M2 stable), correct dV/dλ ✓, auto plain-C kernel ✓,
+edr output + gmx cphmd ✓, chunked -cpi restarts ✓. Run: `LD_LIBRARY_PATH=.../build-cpu/lib gmx mdrun ...`.
+
+## WP5b SIMD kernel — WORKED-OUT PLAN (not yet implemented)
+Measured: reference plain-C-4x4 = ~35 ms/step (8 threads, 46k beads) → ~4–6× slower than SIMD.
+The SIMD kernel is templated into ~200 `.cpp` variants that all `#include` simd_kernel*.h → every edit
+= full recompile of all (~20–40 min/iteration). Implementation (RF is all Martini needs):
+
+Facel factoring (confirmed): `chargeIV[i] = facel*q_i` (simd_kernel.h:405), `qqV[i]=chargeIV[i]*jq_S`,
+`vCoulombV[i]=qqV[i]*coulFuncV[i]` where `coulFuncV[i]=rInvExclV[i]-vCoulombCorrectionV[i]` (RF).
+- **simd_kernel.h:207** add `real* potential=out->potential.data();` + a `computePotential` flag (must be
+  cph-only — gate the out->potential *resize* on cph so non-cph runs keep it empty, then
+  `computePotential=!out->potential.empty()`; else all runs pay the cost).
+- **simd_kernel.h:450** declare `potentialIV` (nR SimdReal, zero-init) alongside forceIXV.
+- **simd_kernel_inner.h**: when computePotential, compute `coulFuncV` even in the `!calculateEnergies`
+  path (call forceAndCorrectionEnergy), mask by withinCutoff; then
+  per-i: `potentialIV[i] += (facel*jq_S)*coulFuncV[i]` (hsum over j at reduce);
+  per-j scatter (after the j-force store ~line 356): `store(potential+aj, load(potential+aj) +
+  sumArray_i(chargeIV[i]*coulFuncV[i]))` (and the Hsimd variant for 2xmm).
+- **simd_kernel.h:528** reduce: `reduceIncr4ReturnSum(potential+sci, potentialIV[0..3])` (4xm) /
+  `...Hsimd(potential+sci, potentialIV[0],[1])` (2xmm). NB sci = ci*c_iClusterSize (atom index), NOT scix.
+- **self-term**: replicate the energy self (simd_kernel.h:367) for potential, OUTSIDE the calculateEnergies
+  guard when computePotential: `potential[sci+ia] -= facel*q[sci+ia]*2*Vc_sub_self`.
+- Then remove the nbnxm_setup guard so cph uses SIMD; VALIDATE against M1 (must match to 1e-4) + M2.
+- Do it behind an env-var opt-in first (keep the validated reference default risk-free).
+
+Until implemented: the guard auto-selects the CORRECT reference 4x4 kernel for cph (usable, ~5× slower).
+- Cosmetic: edr block name shows 'id' not 'Constant pH data' in gmx dump (cphmd matches by numeric id).
+- Multi-rank DD cph (real commrec) — not needed for the single-rank campaign.
 - **WP5b** SIMD kernel (2026 rewrote it — no kernel_inner/outer.h; needs per-j potential scatter).
   Until done, run cph with `GMX_NBNXN_PLAINC_1X1=1` (reference kernel) or add a hard-fatal when
   lambda_dynamics + SIMD kernel selected.
