@@ -266,16 +266,17 @@ static NbnxmKernelSetup pickNbnxnKernelCpu(const t_inputrec&    inputrec,
     {
         return NbnxmKernelSetup{ NbnxmKernelType::Cpu1x1_PlainC, EwaldExclusionType::Table };
     }
-    // Constant-pH (lambda dynamics) needs the per-atom electrostatic potential, which is
-    // only accumulated in the plain-C reference kernels; the SIMD kernels would silently
-    // produce dV/dlambda = 0. Force the plain-C 4x4 kernel.
-    if (inputrec.lambda_dynamics)
+    // Constant-pH (lambda dynamics) needs the per-atom electrostatic potential. Both the
+    // plain-C reference kernels and (since WP5b) the SIMD kernels accumulate it. The SIMD
+    // path is opt-in via GMX_CPH_SIMD while it beds in; the validated default stays the
+    // plain-C 4x4 reference kernel.
+    if (inputrec.lambda_dynamics && std::getenv("GMX_CPH_SIMD") == nullptr)
     {
         GMX_LOG(mdlog.info)
                 .asParagraph()
                 .appendText(
-                        "Constant pH: using the plain-C 4x4 non-bonded kernel, as the SIMD "
-                        "kernels do not compute the per-atom electrostatic potential.");
+                        "Constant pH: using the plain-C 4x4 non-bonded kernel (set GMX_CPH_SIMD to "
+                        "use the faster SIMD kernels with per-atom electrostatic potential).");
         return NbnxmKernelSetup{ NbnxmKernelType::Cpu4x4_PlainC, EwaldExclusionType::Table };
     }
     if (GMX_SIMD && useSimd && nbnxmSimdSupported(mdlog, inputrec))
@@ -554,6 +555,10 @@ std::unique_ptr<nonbonded_verlet_t> init_nb_verlet(const gmx::MDLogger& mdlog,
             false,
             minimumNumEnergyGroupNonbonded,
             (useGpuForNonbonded || emulateGpu) ? 1 : gmx_omp_nthreads_get(ModuleMultiThread::Nonbonded));
+
+    // Constant-pH: tell the atom data (and hence the SIMD non-bonded kernel) to accumulate
+    // the per-atom electrostatic potential that drives dV/dlambda.
+    nbat->setComputeElectrostaticPotential(inputrec.lambda_dynamics);
 
     if (forcerec.ic->vdw.type == VanDerWaalsType::Pme)
     {

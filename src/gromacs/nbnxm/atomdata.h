@@ -349,6 +349,13 @@ struct nbnxn_atomdata_t
     //! Constant-pH: re-push per-atom charges into the nbat (after lambda charges changed).
     void setCharges(const GridSet& gridSet, ArrayRef<const real> chargesA);
 
+    //! Constant-pH: whether the SIMD non-bonded kernel should accumulate the per-atom
+    //! electrostatic potential (true only for lambda-dynamics runs).
+    bool computeElectrostaticPotential() const { return computeElectrostaticPotential_; }
+
+    //! Constant-pH: enable/disable per-atom electrostatic potential accumulation.
+    void setComputeElectrostaticPotential(bool compute) { computeElectrostaticPotential_ = compute; }
+
     /*! \brief Clears the force buffer.
      *
      * Either the whole buffer is cleared or only the parts used
@@ -368,6 +375,10 @@ private:
     int numAtoms_;
     //! The number of local atoms
     int numLocalAtoms_;
+
+    //! Constant-pH: whether the SIMD non-bonded kernel accumulates the per-atom
+    //! electrostatic potential (set from inputrec.lambda_dynamics; false otherwise).
+    bool computeElectrostaticPotential_ = false;
 
 public:
     //! The format of x (and q), enum

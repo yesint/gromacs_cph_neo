@@ -139,6 +139,12 @@
     /* frcoul = qi*qj*(1/r - fsub)*r */
     std::array<SimdReal, nR> frCoulombV;
     std::array<SimdReal, nR> vCoulombV;
+#if GMX_COMPUTE_ELECTROSTATIC_POTENTIAL
+    /* Constant-pH: the Coulomb function value per pair with the charge factors removed
+     * (RF: 1/r + k_rf*r^2 - c_rf), masked by the cut-off. Used to build the per-atom
+     * electrostatic potential. Only filled when computePotential (lambda dynamics). */
+    std::array<SimdReal, nR> gmx_unused coulFuncV;
+#endif
 
     if constexpr (c_calculateCoulombInteractions)
     {
@@ -163,9 +169,45 @@
         /* Electrostatic interactions, frcoul =  qi*qj*(1/r - fsub)*r */
         if constexpr (!calculateEnergies)
         {
-            frCoulombV = coulombCalculator.template force<nR>(rSquaredV, rInvV, rInvExclV, withinCutoffV);
+#if GMX_COMPUTE_ELECTROSTATIC_POTENTIAL
+            if (computePotential)
+            {
+                /* Constant-pH: we need the correction term to build the potential, so use
+                 * forceAndCorrectionEnergy (the force it returns is identical to force()). */
+                std::array<SimdReal, nR> vCoulombCorrectionV;
 
-            frCoulombV = genArr<nR>([&](int i) { return qqV[i] * frCoulombV[i]; });
+                coulombCalculator.template forceAndCorrectionEnergy<nR>(
+                        rSquaredV, rInvV, rInvExclV, withinCutoffV, frCoulombV, vCoulombCorrectionV);
+
+                if constexpr (coulombType != KernelCoulombType::RF)
+                {
+                    if constexpr (c_needToCheckExclusions)
+                    {
+                        vCoulombCorrectionV = genArr<nR>(
+                                [&](int i)
+                                { return vCoulombCorrectionV[i] + selectByMask(ewaldShift, interactV[i]); });
+                    }
+                    else
+                    {
+                        vCoulombCorrectionV =
+                                genArr<nR>([&](int i) { return vCoulombCorrectionV[i] + ewaldShift; });
+                    }
+                }
+
+                coulFuncV = genArr<nR>([&](int i)
+                                       { return selectByMask(rInvExclV[i] - vCoulombCorrectionV[i],
+                                                             withinCutoffV[i]); });
+
+                frCoulombV = genArr<nR>([&](int i) { return qqV[i] * frCoulombV[i]; });
+            }
+            else
+#endif
+            {
+                frCoulombV =
+                        coulombCalculator.template force<nR>(rSquaredV, rInvV, rInvExclV, withinCutoffV);
+
+                frCoulombV = genArr<nR>([&](int i) { return qqV[i] * frCoulombV[i]; });
+            }
         }
         else
         {
@@ -192,6 +234,16 @@
                             genArr<nR>([&](int i) { return vCoulombCorrectionV[i] + ewaldShift; });
                 }
             }
+
+#if GMX_COMPUTE_ELECTROSTATIC_POTENTIAL
+            /* Constant-pH: same Coulomb function value as feeds the energy below. */
+            if (computePotential)
+            {
+                coulFuncV = genArr<nR>([&](int i)
+                                       { return selectByMask(rInvExclV[i] - vCoulombCorrectionV[i],
+                                                             withinCutoffV[i]); });
+            }
+#endif
 
             /* Combine Coulomb and correction terms */
             vCoulombV = genArr<nR>([&](int i)
@@ -363,6 +415,39 @@
     {
         decr3Hsimd(f + aj * DIM, sumArray(txV), sumArray(tyV), sumArray(tzV));
     }
+
+#if GMX_COMPUTE_ELECTROSTATIC_POTENTIAL
+    /* Constant-pH: accumulate the per-atom electrostatic potential.
+     *   i-atom: V_i += sum_j facel*q_j*coulFunc(i,j)   (reduced after the j-loop)
+     *   j-atom: V_j += sum_i facel*q_i*coulFunc(i,j)   (scattered here)
+     * where coulFunc already carries the RF/Ewald form and the cut-off mask, and
+     * chargeIV[i] = facel*q_i. This mirrors the plain-C reference kernel. */
+    if constexpr (c_calculateCoulombInteractions)
+    {
+        if (computePotential)
+        {
+            const SimdReal jq_S    = loadJAtomData<kernelLayout>(q, aj);
+            const SimdReal faceljq = facel * jq_S;
+            for (int i = 0; i < nR; i++)
+            {
+                potentialIV[i] = potentialIV[i] + faceljq * coulFuncV[i];
+            }
+
+            const auto potentialJV = genArr<nR>([&](int i) { return chargeIV[i] * coulFuncV[i]; });
+            if constexpr (c_numJClustersPerSimdRegister == 1)
+            {
+                store(potential + aj, load<SimdReal>(potential + aj) + sumArray(potentialJV));
+            }
+            else
+            {
+                /* Fold the two duplicated j-cluster halves into the 4 j-atoms. Passing the
+                 * same pointer as both arguments makes incrDualHsimd add low+high halves
+                 * (the two sequential read-modify-writes accumulate into potential[aj..]). */
+                incrDualHsimd(potential + aj, potential + aj, sumArray(potentialJV));
+            }
+        }
+    }
+#endif
 }
 
 #endif // !DOXYGEN

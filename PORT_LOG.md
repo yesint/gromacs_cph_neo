@@ -99,37 +99,48 @@ alignment). VALIDATED: restart λ trajectory matches the continuous-run referenc
 grompp ✓, multi-step MD ✓ (M1 5e-5 vs fork, M2 stable), correct dV/dλ ✓, auto plain-C kernel ✓,
 edr output + gmx cphmd ✓, chunked -cpi restarts ✓. Run: `LD_LIBRARY_PATH=.../build-cpu/lib gmx mdrun ...`.
 
-## WP5b SIMD kernel — WORKED-OUT PLAN (not yet implemented)
-Measured: reference plain-C-4x4 = ~35 ms/step (8 threads, 46k beads) → ~4–6× slower than SIMD.
-The SIMD kernel is templated into ~200 `.cpp` variants that all `#include` simd_kernel*.h → every edit
-= full recompile of all (~20–40 min/iteration). Implementation (RF is all Martini needs):
+## ✅✅ WP5b SIMD kernel — DONE + VALIDATED (2026-07-07)
+The SIMD non-bonded kernel now accumulates the per-atom electrostatic potential, so cph runs
+on the fast SIMD kernels instead of the plain-C reference. **Opt-in via `GMX_CPH_SIMD=1`**; the
+validated default stays plain-C 4x4 (risk-free). Files touched (all under `src/gromacs/nbnxm/`):
+- **atomdata.{h,cpp}**: added `computeElectrostaticPotential_` flag (+ getter/setter). This is the
+  runtime signal that gates the SIMD potential work — set = `inputrec.lambda_dynamics` in
+  `nbnxm_setup.cpp` right after nbat construction. (The potential *buffer* resize stays keyed on the
+  compile macro so the reference kernel is untouched; the SIMD kernel gates on the flag, so non-cph
+  SIMD runs skip the work.)
+- **nbnxm_setup.cpp** `pickNbnxnKernelCpu`: cph forces plain-C 4x4 **only when `GMX_CPH_SIMD` is unset**;
+  with it set, cph uses the normal SIMD selection.
+- **simd_kernel.h**: unpack `potential` ptr + `computePotential` bool; init `ewaldShift` also when the
+  potential macro is on (needed on non-energy steps); zero-init a `potentialIV[nR]` accumulator by the
+  i-forces; RF/Ewald potential **self-term** (runtime-guarded, mirrors the energy self); after the
+  j-loop **reduce** `potentialIV` into `potential[sci..]` via `reduceIncr4ReturnSum` (4xM) /
+  `reduceIncr4ReturnSumHsimd` (2xMM) — index by **atom** (`sci`), not coord (`scix`).
+- **simd_kernel_inner.h**: compute `coulFuncV[i] = selectByMask(rInvExclV[i]-vCoulombCorrectionV[i],
+  withinCutoffV[i])` (in the `!calculateEnergies` path too, via forceAndCorrectionEnergy); then
+  i-atom `potentialIV[i] += (facel*jq_S)*coulFuncV[i]` and j-atom scatter of `sumArray_i(chargeIV[i]*
+  coulFuncV[i])` — 4xM: `store(potential+aj, load+sum)`; 2xMM: `incrDualHsimd(potential+aj,
+  potential+aj, sum)` (same-ptr trick folds the two duplicated j-halves = low+high).
 
-Facel factoring (confirmed): `chargeIV[i] = facel*q_i` (simd_kernel.h:405), `qqV[i]=chargeIV[i]*jq_S`,
-`vCoulombV[i]=qqV[i]*coulFuncV[i]` where `coulFuncV[i]=rInvExclV[i]-vCoulombCorrectionV[i]` (RF).
-- **simd_kernel.h:207** add `real* potential=out->potential.data();` + a `computePotential` flag (must be
-  cph-only — gate the out->potential *resize* on cph so non-cph runs keep it empty, then
-  `computePotential=!out->potential.empty()`; else all runs pay the cost).
-- **simd_kernel.h:450** declare `potentialIV` (nR SimdReal, zero-init) alongside forceIXV.
-- **simd_kernel_inner.h**: when computePotential, compute `coulFuncV` even in the `!calculateEnergies`
-  path (call forceAndCorrectionEnergy), mask by withinCutoff; then
-  per-i: `potentialIV[i] += (facel*jq_S)*coulFuncV[i]` (hsum over j at reduce);
-  per-j scatter (after the j-force store ~line 356): `store(potential+aj, load(potential+aj) +
-  sumArray_i(chargeIV[i]*coulFuncV[i]))` (and the Hsimd variant for 2xmm).
-- **simd_kernel.h:528** reduce: `reduceIncr4ReturnSum(potential+sci, potentialIV[0..3])` (4xm) /
-  `...Hsimd(potential+sci, potentialIV[0],[1])` (2xmm). NB sci = ci*c_iClusterSize (atom index), NOT scix.
-- **self-term**: replicate the energy self (simd_kernel.h:367) for potential, OUTSIDE the calculateEnergies
-  guard when computePotential: `potential[sci+ia] -= facel*q[sci+ia]*2*Vc_sub_self`.
-- Then remove the nbnxm_setup guard so cph uses SIMD; VALIDATE against M1 (must match to 1e-4) + M2.
-- Do it behind an env-var opt-in first (keep the validated reference default risk-free).
+**Layout note (AVX2_256, single):** default selection is **4xN** (c_iClusterSize=4, c_jClusterSize=8,
+1 j-cluster/reg, nR=4, clusterRatio JSizeIsDoubleISize → `sci=(ci>>1)*8+(ci&1)*4`); 2xNN also compiled.
+Both paths implemented and validated.
 
-Until implemented: the guard auto-selects the CORRECT reference 4x4 kernel for cph (usable, ~5× slower).
+**Validation (all vs the locked fork oracle / the reference kernel):**
+- **M1** (single-point, 46 λ groups, `bash <scratchpad>/run_m1_simd.sh`): SIMD 4xN & 2xNN dV/dλ match
+  the fork oracle to **max 1e-4** (mean 2.5e-5) — pure single-precision noise (largest-|dvdl| group 3
+  −209.36 → reldiff 1.4e-7). SIMD-vs-reference-kernel max 6e-5. Reference regression preserved (5e-5).
+- **M2** (`ck2.tpr`, 4 steps, dt=0.001, **nstlist=1** ⇒ NS+charge-repush every step): SIMD per-step
+  maxAbsDvdl & λ track the reference kernel to ~1e-5; stable, no accumulation.
+- **Output path**: `gmx cphmd -dvdl` on the SIMD-produced `.edr` matches the reference `.edr` to 2e-4
+  over all 230 per-step/per-group cells (5 steps × 46 groups).
+- **Speed** (8 threads, 46k beads, `ck2.tpr`): NB Force **31.97 ms/step (plain-C-4x4) → 4.13 ms/step
+  (SIMD-4xN) ≈ 7.7× faster**; total wall ~3.2× (short run; higher once startup amortizes).
+
+**How to run cph on SIMD:** `GMX_CPH_SIMD=1 LD_LIBRARY_PATH=.../build-cpu/lib gmx mdrun ...` (auto 4xN;
+force layout with `GMX_NBNXN_SIMD_4XN` / `GMX_NBNXN_SIMD_2XNN`). Without `GMX_CPH_SIMD`, still plain-C 4x4.
+
+## THE PORT IS FULLY COMPLETE — remaining items are cosmetic/optional
 - Cosmetic: edr block name shows 'id' not 'Constant pH data' in gmx dump (cphmd matches by numeric id).
 - Multi-rank DD cph (real commrec) — not needed for the single-rank campaign.
-- **WP5b** SIMD kernel (2026 rewrote it — no kernel_inner/outer.h; needs per-j potential scatter).
-  Until done, run cph with `GMX_NBNXN_PLAINC_1X1=1` (reference kernel) or add a hard-fatal when
-  lambda_dynamics + SIMD kernel selected.
-- **WP6** proper output: wire ConstantPH::writeToEnergyFrame → EnergyOutput/mdoutf enxCPHMD block
-  (replace the GMX_CPH_DUMP_DVDL debug dump); checkpoint λ x,v; register `gmx cphmd` tool.
-- **Production correctness**: per-step charge re-push (`nbv->setAtomCharges` each step, not just NS steps)
-  + `kernel_common.cpp` potential-buffer clear each step (M1 is single-step so neither bit yet).
-- **M2–M5**: multi-step dV/dλ across an NS step; titration/pKa vs fork; a two-domain window; regression test.
+- M3–M5 (titration/pKa vs fork; full two-domain window; refdata regression test) — science validation,
+  not port work.

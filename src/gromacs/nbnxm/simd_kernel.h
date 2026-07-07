@@ -207,6 +207,15 @@ void nbnxmKernelSimd(const NbnxnPairlistCpu&    pairlist,
     real*            f      = out->f.data();
     real gmx_unused* fshift = out->fshift.data();
 
+#if GMX_COMPUTE_ELECTROSTATIC_POTENTIAL
+    /* Constant-pH: per-atom electrostatic potential accumulator (nbat order). Only filled
+     * for lambda-dynamics runs; for all other runs computePotential is false and the extra
+     * work is skipped. The buffer is shared with the reference kernel (see atomdata). */
+    real* gmx_unused      potential = out->potential.empty() ? nullptr : out->potential.data();
+    const bool gmx_unused computePotential =
+            haveElectrostatics && nbat.computeElectrostaticPotential() && potential != nullptr;
+#endif
+
     const SimdReal zero_S(0.0);
 
 #ifdef COUNT_PAIRS
@@ -260,7 +269,10 @@ void nbnxmKernelSimd(const NbnxnPairlistCpu&    pairlist,
     CoulombCalculator<coulombType> coulombCalculator(ic);
 
     gmx_unused SimdReal ewaldShift;
-    if constexpr (coulombType != KernelCoulombType::RF && calculateEnergies)
+    /* The Ewald potential shift is needed both for energies and (constant-pH) for the
+     * per-atom electrostatic potential, which is computed on every step. */
+    if constexpr (coulombType != KernelCoulombType::RF
+                  && (calculateEnergies || GMX_COMPUTE_ELECTROSTATIC_POTENTIAL != 0))
     {
         ewaldShift = SimdReal(ic.coulomb.ewaldShift);
     }
@@ -388,6 +400,21 @@ void nbnxmKernelSimd(const NbnxnPairlistCpu&    pairlist,
 
         } // calulateEnergies
 
+#if GMX_COMPUTE_ELECTROSTATIC_POTENTIAL
+        /* Constant-pH: reaction-field/Ewald self-term for the per-atom electrostatic
+         * potential. This is needed on every step (independent of calculateEnergies) and
+         * mirrors the plain-C reference kernel: potential[i] -= facel*q_i*2*Vc_sub_self. */
+        if (computePotential && do_coul
+            && l_cj[ciEntry.cj_ind_start].cj == cjFromCi<clusterRatio>(ci_sh))
+        {
+            const real Vc_sub_self = coulombCalculator.selfEnergy();
+            for (int ia = 0; ia < c_iClusterSize; ia++)
+            {
+                potential[sci + ia] -= facel * q[sci + ia] * 2 * Vc_sub_self;
+            }
+        }
+#endif
+
         /* Load i atom data */
         const int sciy = scix + c_stride;
         const int sciz = sciy + c_stride;
@@ -450,6 +477,12 @@ void nbnxmKernelSimd(const NbnxnPairlistCpu&    pairlist,
         auto forceIXV = genArr<nR>([&](int gmx_unused i) { return setZero(); });
         auto forceIYV = genArr<nR>([&](int gmx_unused i) { return setZero(); });
         auto forceIZV = genArr<nR>([&](int gmx_unused i) { return setZero(); });
+
+#if GMX_COMPUTE_ELECTROSTATIC_POTENTIAL
+        /* Constant-pH: per-i-atom electrostatic potential accumulated over the j-loop,
+         * reduced into potential[sci..] after the loop (mirrors the i-force reduction). */
+        auto gmx_unused potentialIV = genArr<nR>([&](int gmx_unused i) { return setZero(); });
+#endif
 
 
         int cjind = cjind0;
@@ -542,6 +575,24 @@ void nbnxmKernelSimd(const NbnxnPairlistCpu&    pairlist,
             fshift[ish3 + 1] += fShiftY;
             fshift[ish3 + 2] += fShiftZ;
         }
+
+#if GMX_COMPUTE_ELECTROSTATIC_POTENTIAL
+        /* Constant-pH: reduce the per-i-atom potential into potential[sci..sci+3]
+         * (same reduction pattern as the i-forces, but indexed by atom rather than by
+         * coordinate; sci is the nbat atom index of the first i-atom). */
+        if (computePotential)
+        {
+            if constexpr (c_numJClustersPerSimdRegister == 1)
+            {
+                reduceIncr4ReturnSum(
+                        potential + sci, potentialIV[0], potentialIV[1], potentialIV[2], potentialIV[3]);
+            }
+            else
+            {
+                reduceIncr4ReturnSumHsimd(potential + sci, potentialIV[0], potentialIV[1]);
+            }
+        }
+#endif
 
         energyAccumulator.reduceIEnergies(do_coul);
 
