@@ -59,6 +59,7 @@
 #include "gromacs/utility/real.h"
 #include "gromacs/utility/vectypes.h"
 
+class ConstantPH;
 class energyhistory_t;
 struct ener_file;
 class gmx_ekindata_t;
@@ -234,8 +235,9 @@ public:
                                FILE*      log,
                                int64_t    step,
                                double     time,
-                               t_fcdata*  fcd,
-                               gmx::Awh*  awh);
+                               t_fcdata*   fcd,
+                               gmx::Awh*   awh,
+                               ConstantPH* cphmd = nullptr);
 
     /*! \brief Print reference temperatures for annealing groups.
      *

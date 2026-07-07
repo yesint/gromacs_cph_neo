@@ -55,6 +55,7 @@
 #include <string>
 
 #include "gromacs/applied_forces/awh/awh.h"
+#include "gromacs/applied_forces/constant_ph/constant_ph.h"
 #include "gromacs/applied_forces/awh/read_params.h"
 #include "gromacs/fileio/enxio.h"
 #include "gromacs/fileio/gmxfio.h"
@@ -1192,8 +1193,9 @@ void EnergyOutput::printStepToEnergyFile(ener_file* fp_ene,
                                          FILE*      log,
                                          int64_t    step,
                                          double     time,
-                                         t_fcdata*  fcd,
-                                         gmx::Awh*  awh)
+                                         t_fcdata*   fcd,
+                                         gmx::Awh*   awh,
+                                         ConstantPH* cphmd)
 {
     t_enxframe fr;
     init_enxframe(&fr);
@@ -1302,6 +1304,12 @@ void EnergyOutput::printStepToEnergyFile(ener_file* fp_ene,
         if (awh != nullptr) // TODO: add boolean flag.
         {
             awh->writeToEnergyFrame(step, &fr);
+        }
+
+        /* Constant-pH (lambda dynamics) block. */
+        if (cphmd != nullptr)
+        {
+            cphmd->writeToEnergyFrame(step, &fr);
         }
 
         /* do the actual I/O */

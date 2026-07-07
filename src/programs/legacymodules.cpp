@@ -63,6 +63,7 @@
 #include "gromacs/gmxpreprocess/x2top.h"
 #include "gromacs/tools/check.h"
 #include "gromacs/tools/convert_tpr.h"
+#include "gromacs/tools/cphmd.h"
 #include "gromacs/tools/dump.h"
 #include "gromacs/tools/eneconv.h"
 #include "gromacs/tools/make_ndx.h"
@@ -180,6 +181,8 @@ void registerLegacyModules(gmx::CommandLineModuleManager* manager)
     registerModule(manager, &gmx_check, "check", "Check and compare files");
     gmx::ICommandLineOptionsModule::registerModuleFactory(
             manager, gmx::DumpInfo::name, gmx::DumpInfo::shortDescription, &gmx::DumpInfo::create);
+    gmx::ICommandLineOptionsModule::registerModuleFactory(
+            manager, gmx::CpHMDInfo::name, gmx::CpHMDInfo::shortDescription, &gmx::CpHMDInfo::create);
     registerModule(manager, &gmx_grompp, "grompp", "Make a run input file");
     gmx::ICommandLineOptionsModule::registerModuleFactory(manager,
                                                           gmx::ConvertTprInfo::name,

@@ -2034,7 +2034,8 @@ void gmx::LegacySimulator::do_md()
                 gmx::EnergyOutput::printAnnealingTemperatures(
                         do_log ? fpLog_ : nullptr, *groups, ir->opts, *ekind_);
             }
-            if (do_log || do_ene || do_dr || do_or)
+            const bool do_cphmd = constantph_ && constantph_->isOutputStep(step);
+            if (do_log || do_ene || do_dr || do_or || do_cphmd)
             {
                 energyOutput.printStepToEnergyFile(mdoutf_get_fp_ene(outf),
                                                    do_ene,
@@ -2044,7 +2045,8 @@ void gmx::LegacySimulator::do_md()
                                                    step,
                                                    t,
                                                    fr_->fcdata.get(),
-                                                   awh.get());
+                                                   awh.get(),
+                                                   constantph_);
             }
             if (do_log && ((ir->bDoAwh && awh->hasFepLambdaDimension()) || ir->fepvals->delta_lambda != 0))
             {
