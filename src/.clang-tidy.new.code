@@ -1,0 +1,85 @@
+Checks:  clang-diagnostic-*,-clang-analyzer-*,
+         bugprone-*,misc-*,readability-*,performance-*,mpi-*,-misc-incorrect-roundings,
+         -readability-else-after-return,
+         modernize-use-nullptr,modernize-use-emplace,
+         modernize-make-unique,modernize-make-shared,
+         modernize-avoid-bind,
+         modernize-use-override,
+         modernize-redundant-void-arg,modernize-use-bool-literals,
+         cppcoreguidelines-*,-cppcoreguidelines-pro-type-reinterpret-cast,-cppcoreguidelines-pro-type-const-cast,
+         -cppcoreguidelines-pro-type-static-cast-downcast,
+         -cppcoreguidelines-special-member-functions,-cppcoreguidelines-pro-type-vararg,
+         -cppcoreguidelines-pro-bounds-constant-array-index,
+         -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+         -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+         -cppcoreguidelines-avoid-goto,
+         google-*,-google-build-using-namespace,-google-explicit-constructor,
+         -google-readability-todo,
+         -google-runtime-int,
+         -cppcoreguidelines-non-private-member-variables-in-classes,
+         -misc-non-private-member-variables-in-classes,
+         -readability-isolate-declaration,
+         -cppcoreguidelines-avoid-c-arrays,
+         -cppcoreguidelines-avoid-magic-numbers,
+         -readability-magic-numbers,
+         -cppcoreguidelines-macro-usage,
+         -cppcoreguidelines-narrowing-conversions,
+         -cppcoreguidelines-init-variables,
+         -bugprone-narrowing-conversions,
+         -misc-no-recursion,
+         -performance-enum-size,
+         -readability-identifier-length,
+         -bugprone-assignment-in-if-condition,
+         -bugprone-easily-swappable-parameters,
+         -bugprone-empty-catch,
+         -bugprone-implicit-widening-of-multiplication-result,
+         -bugprone-multi-level-implicit-pointer-conversion,
+         -bugprone-unchecked-optional-access,
+         -bugprone-unsafe-functions,
+         -bugprone-suspicious-memory-comparison,
+         -bugprone-switch-missing-default-case,
+         -bugprone-throw-keyword-missing,
+         -cppcoreguidelines-avoid-const-or-ref-data-members,
+         -cppcoreguidelines-avoid-do-while,
+         -cppcoreguidelines-macro-to-enum,
+         -cppcoreguidelines-prefer-member-initializer,
+         -cppcoreguidelines-use-default-member-init,
+         -google-readability-casting,
+         -misc-header-include-cycle,
+         -misc-include-cleaner,
+         -misc-confusable-identifiers,
+         -misc-const-correctness,
+         -misc-use-anonymous-namespace,
+         -modernize-use-emplace,
+         -performance-no-int-to-ptr,
+         -readability-avoid-nested-conditional-operator,
+         -readability-avoid-unconditional-preprocessor-if,
+         -readability-cognitive-complexity,
+         -readability-container-data-pointer,
+         -readability-function-cognitive-complexity,
+         -readability-make-member-function-const,
+         -readability-non-const-parameter,
+         -readability-redundant-casting,
+         -readability-redundant-member-init,
+         -readability-simplify-boolean-expr,
+         -readability-suspicious-call-argument,
+         -readability-uppercase-literal-suffix
+HeaderFilterRegex: .*
+CheckOptions:
+  - key:           cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor
+    value:         1
+  - key:           modernize-make-unique.IncludeStyle
+    value:         google
+  - key:           modernize-make-shared.IncludeStyle
+    value:         google
+  - key:           readability-implicit-bool-conversion.AllowIntegerConditions
+    value:         1
+  - key:           readability-implicit-bool-conversion.AllowPointerConditions
+    value:         1
+  - key:           bugprone-dangling-handle.HandleClasses
+    value:         std::basic_string_view; nonstd::sv_lite::basic_string_view
+# Permit passing shard pointers by value for sink parameters
+  - key:           performance-unnecessary-copy-initialization.AllowedTypes
+    value:         shared_ptr
+  - key:           performance-unnecessary-value-param.AllowedTypes
+    value:         shared_ptr

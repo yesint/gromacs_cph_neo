@@ -1,0 +1,192 @@
+.\" Man page generated from reStructuredText.
+.
+.
+.nr rst2man-indent-level 0
+.
+.de1 rstReportMargin
+\\$1 \\n[an-margin]
+level \\n[rst2man-indent-level]
+level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
+-
+\\n[rst2man-indent0]
+\\n[rst2man-indent1]
+\\n[rst2man-indent2]
+..
+.de1 INDENT
+.\" .rstReportMargin pre:
+. RS \\$1
+. nr rst2man-indent\\n[rst2man-indent-level] \\n[an-margin]
+. nr rst2man-indent-level +1
+.\" .rstReportMargin post:
+..
+.de UNINDENT
+. RE
+.\" indent \\n[an-margin]
+.\" old: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.nr rst2man-indent-level -1
+.\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.in \\n[rst2man-indent\\n[rst2man-indent-level]]u
+..
+.TH "GMX-DSSP" "1" "Mar 06, 2026" "2026.1" "GROMACS"
+.SH NAME
+gmx-dssp \- Calculate protein secondary structure via DSSP algorithm
+.SH SYNOPSIS
+.INDENT 0.0
+.INDENT 3.5
+.sp
+.EX
+gmx dssp [\fB\-f\fP \fI[<.xtc/.trr/...>]\fP] [\fB\-s\fP \fI[<.tpr/.gro/...>]\fP] [\fB\-n\fP \fI[<.ndx>]\fP]
+         [\fB\-o\fP \fI[<.dat>]\fP] [\fB\-num\fP \fI[<.xvg>]\fP] [\fB\-b\fP \fI<time>\fP] [\fB\-e\fP \fI<time>\fP]
+         [\fB\-dt\fP \fI<time>\fP] [\fB\-tu\fP \fI<enum>\fP] [\fB\-fgroup\fP \fI<selection>\fP]
+         [\fB\-xvg\fP \fI<enum>\fP] [\fB\-[no]rmpbc\fP] [\fB\-[no]pbc\fP] [\fB\-sf\fP \fI<file>\fP]
+         [\fB\-selrpos\fP \fI<enum>\fP] [\fB\-seltype\fP \fI<enum>\fP] [\fB\-sel\fP \fI<selection>\fP]
+         [\fB\-hmode\fP \fI<enum>\fP] [\fB\-hbond\fP \fI<enum>\fP] [\fB\-[no]nb\fP] [\fB\-cutoff\fP \fI<real>\fP]
+         [\fB\-[no]clear\fP] [\fB\-[no]pihelix\fP] [\fB\-ppstretch\fP \fI<enum>\fP]
+         [\fB\-[no]polypro\fP]
+.EE
+.UNINDENT
+.UNINDENT
+.SH DESCRIPTION
+.sp
+\fBgmx dssp\fP allows using the DSSP algorithm (namely, by detecting specific patterns of hydrogen bonds between amino acid residues) to determine the secondary structure of a protein.
+.sp
+One\-symbol secondary structure designations that are used in the output file:
+.sp
+\fBH\fP — alpha\-helix;
+.sp
+\fBB\fP — residue in isolated beta\-bridge;
+.sp
+\fBE\fP — extended strand that participates in beta\-ladder;
+.sp
+\fBG\fP — 3_10\-helix;
+.sp
+\fBI\fP — pi\-helix;
+.sp
+\fBP\fP — kappa\-helix (poly\-proline II helix);
+.sp
+\fBS\fP — bend;
+.sp
+\fBT\fP — hydrogen\-bonded turn;
+.sp
+\fB=\fP — break;
+.sp
+\fB~\fP — loop (no special secondary structure designation).
+.sp
+\fB\-num\fP allows you to get a plot of the number of secondary structures of each type as a function of time at the output.
+.sp
+\fB\-hmode\fP selects between using hydrogen atoms directly from the structure (\(dqgromacs\(dq option) and using hydrogen pseudo\-atoms based on C and O atom coordinates of previous residue (\(dqdssp\(dq option). You should always use the \(dqdssp\(dq option for structures with absent hydrogen atoms!
+.sp
+\fB\-hbond\fP selects between different definitions of hydrogen bond. \(dqenergy\(dq means the calculation of a hydrogen bond using the electrostatic interaction energy and \(dqgeometry\(dq means the calculation of the hydrogen bond using geometric criterion for the existence of a hydrogen bond.
+.sp
+\fB\-nb\fP allows using GROMACS neighbor\-search method to find residue pairs that may have a hydrogen bond instead of simply iterating over the residues among themselves.
+.sp
+\fB\-cutoff\fP is a real value that defines maximum distance from residue to its neighbor residue used in \fB\-nb\fP\&. Minimum (and also recommended) value is 0.9.
+.sp
+\fB\-clear\fP allows you to ignore the analysis of the secondary structure residues that are missing one or more critical atoms (CA, C, N, O or H). Always use this option together with \fB\-hmode dssp\fP for structures that lack hydrogen atoms!
+.sp
+\fB\-pihelix\fP changes pattern\-search algorithm towards preference of pi\-helices.
+.sp
+\fB\-ppstretch\fP defines stretch value of polyproline\-helices. \(dqshortened\(dq means stretch with size 2 and \(dqdefault\(dq means stretch with size 3.
+.sp
+\fB\-polypro\fP enables the search for polyproline helices (default behavior, equivalent to DSSP v4). Disabling this option will result in disabling the search for polyproline helices, reproducing the behavior of DSSP v2.
+.sp
+Note that \fBgmx dssp\fP currently is not capable of reproducing the secondary structure of proteins whose structure is determined by methods other than X\-ray crystallography (structures in .pdb format with incorrect values in the CRYST1 line) due to the incorrect cell size in such structures.
+.sp
+Please note that the computation is always done in single precision, regardless of the precision for which GROMACS was configured.
+.SH OPTIONS
+.sp
+Options to specify input files:
+.INDENT 0.0
+.TP
+.B \fB\-f\fP [<.xtc/.trr/...>] (traj.xtc) (Optional)
+Input trajectory or single configuration: \fI\%xtc\fP \fI\%trr\fP \fI\%cpt\fP \fI\%gro\fP \fI\%g96\fP \fI\%pdb\fP \fI\%tng\fP h5md
+.TP
+.B \fB\-s\fP [<.tpr/.gro/...>] (topol.tpr) (Optional)
+Input structure: \fI\%tpr\fP \fI\%gro\fP \fI\%g96\fP \fI\%pdb\fP brk ent
+.TP
+.B \fB\-n\fP [<.ndx>] (index.ndx) (Optional)
+Extra index groups
+.UNINDENT
+.sp
+Options to specify output files:
+.INDENT 0.0
+.TP
+.B \fB\-o\fP [<.dat>] (dssp.dat)
+Filename for DSSP output
+.TP
+.B \fB\-num\fP [<.xvg>] (num.xvg) (Optional)
+Output file name for secondary structures statistics for the trajectory
+.UNINDENT
+.sp
+Other options:
+.INDENT 0.0
+.TP
+.B \fB\-b\fP <time> (0)
+First frame (ps) to read from trajectory
+.TP
+.B \fB\-e\fP <time> (0)
+Last frame (ps) to read from trajectory
+.TP
+.B \fB\-dt\fP <time> (0)
+Only use frame if t MOD dt == first time (ps)
+.TP
+.B \fB\-tu\fP <enum> (ps)
+Unit for time values: fs, ps, ns, us, ms, s
+.TP
+.B \fB\-fgroup\fP <selection>
+Atoms stored in the trajectory file (if not set, assume first N atoms)
+.TP
+.B \fB\-xvg\fP <enum> (xmgrace)
+Plot formatting: xmgrace, xmgr, none
+.TP
+.B \fB\-[no]rmpbc\fP  (yes)
+Make molecules whole for each frame
+.TP
+.B \fB\-[no]pbc\fP  (yes)
+Use periodic boundary conditions for distance calculation
+.TP
+.B \fB\-sf\fP <file>
+Provide selections from files
+.TP
+.B \fB\-selrpos\fP <enum> (atom)
+Selection reference positions: atom, res_com, res_cog, mol_com, mol_cog, whole_res_com, whole_res_cog, whole_mol_com, whole_mol_cog, part_res_com, part_res_cog, part_mol_com, part_mol_cog, dyn_res_com, dyn_res_cog, dyn_mol_com, dyn_mol_cog
+.TP
+.B \fB\-seltype\fP <enum> (atom)
+Default selection output positions: atom, res_com, res_cog, mol_com, mol_cog, whole_res_com, whole_res_cog, whole_mol_com, whole_mol_cog, part_res_com, part_res_cog, part_mol_com, part_mol_cog, dyn_res_com, dyn_res_cog, dyn_mol_com, dyn_mol_cog
+.TP
+.B \fB\-sel\fP <selection>
+Group for DSSP
+.TP
+.B \fB\-hmode\fP <enum> (gromacs)
+Hydrogens pseudoatoms creating mode: gromacs, dssp
+.TP
+.B \fB\-hbond\fP <enum> (energy)
+Selects between different definitions of hydrogen bond: energy, geometry
+.TP
+.B \fB\-[no]nb\fP  (yes)
+Use GROMACS neighbor\-search method
+.TP
+.B \fB\-cutoff\fP <real> (0.9)
+Distance from residue to its neighbor residue in neighbor search. Must be >= 0.9
+.TP
+.B \fB\-[no]clear\fP  (no)
+Clear defective residues from the structure
+.TP
+.B \fB\-[no]pihelix\fP  (no)
+Prefer Pi Helices
+.TP
+.B \fB\-ppstretch\fP <enum> (default)
+Stretch value for PP\-helices: shortened, default
+.TP
+.B \fB\-[no]polypro\fP  (yes)
+Perform a search for polyproline helices
+.UNINDENT
+.SH SEE ALSO
+.sp
+\fBgmx(1)\fP
+.sp
+More information about GROMACS is available at <\X'tty: link http://www.gromacs.org/'\fI\%http://www.gromacs.org/\fP\X'tty: link'>.
+.SH COPYRIGHT
+2026, GROMACS development team
+.\" Generated by docutils manpage writer.
+.

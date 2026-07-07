@@ -1,0 +1,9 @@
+This directory contains only the barebones version of the
+lmfit package, version 9.0. Full version is available from
+https://jugit.fz-juelich.de/mlz/lmfit/
+
+This version contains minor modifications
+* to convert to C++,
+* to declare functions not used outside lmfit.cpp as static,
+* to remove/disable some dead code (error estimate), and
+* to introduce some explicit pointer casts to pacify compilers.

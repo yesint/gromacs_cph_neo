@@ -1,0 +1,963 @@
+/*
+ * This file is part of the GROMACS molecular simulation package.
+ *
+ * Copyright 2014- The GROMACS Authors
+ * and the project initiators Erik Lindahl, Berk Hess and David van der Spoel.
+ * Consult the AUTHORS/COPYING files and https://www.gromacs.org for details.
+ *
+ * GROMACS is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public License
+ * as published by the Free Software Foundation; either version 2.1
+ * of the License, or (at your option) any later version.
+ *
+ * GROMACS is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with GROMACS; if not, see
+ * https://www.gnu.org/licenses, or write to the Free Software Foundation,
+ * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA.
+ *
+ * If you want to redistribute modifications to GROMACS, please
+ * consider that scientific software is very special. Version
+ * control is crucial - bugs must be traceable. We will be happy to
+ * consider code for inclusion in the official distribution, but
+ * derived work must not be called official GROMACS. Details are found
+ * in the README & COPYING files - if they are missing, get the
+ * official version at https://www.gromacs.org.
+ *
+ * To help us fund GROMACS development, we humbly ask that you cite
+ * the research papers on the package. Check out https://www.gromacs.org.
+ */
+/*! \internal \file
+ *
+ * \brief This file defines high-level functions for mdrun to compute
+ * energies and forces for listed interactions.
+ *
+ * \author Mark Abraham <mark.j.abraham@gmail.com>
+ *
+ * \ingroup module_listed_forces
+ */
+#include "gmxpre.h"
+
+#include "listed_forces.h"
+
+#include <algorithm>
+#include <array>
+#include <filesystem>
+#include <iterator>
+#include <numeric>
+#include <string>
+
+#include "gromacs/gmxlib/nrnb.h"
+#include "gromacs/listed_forces/bonded.h"
+#include "gromacs/listed_forces/disre.h"
+#include "gromacs/listed_forces/orires.h"
+#include "gromacs/listed_forces/pairs.h"
+#include "gromacs/listed_forces/position_restraints.h"
+#include "gromacs/math/arrayrefwithpadding.h"
+#include "gromacs/mdlib/enerdata_utils.h"
+#include "gromacs/mdlib/force.h"
+#include "gromacs/mdtypes/enerdata.h"
+#include "gromacs/mdtypes/fcdata.h"
+#include "gromacs/mdtypes/forceoutput.h"
+#include "gromacs/mdtypes/forcerec.h"
+#include "gromacs/mdtypes/inputrec.h"
+#include "gromacs/mdtypes/md_enums.h"
+#include "gromacs/mdtypes/simulation_workload.h"
+#include "gromacs/mdtypes/threaded_force_buffer.h"
+#include "gromacs/pbcutil/ishift.h"
+#include "gromacs/pbcutil/pbc.h"
+#include "gromacs/timing/wallcycle.h"
+#include "gromacs/topology/topology.h"
+#include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/enumerationhelpers.h"
+#include "gromacs/utility/exceptions.h"
+#include "gromacs/utility/fatalerror.h"
+#include "gromacs/utility/gmxassert.h"
+
+#include "listed_internal.h"
+#include "manage_threading.h"
+#include "utilities.h"
+
+ListedForces::ListedForces(const gmx_ffparams_t&      ffparams,
+                           const int                  numEnergyGroups,
+                           const int                  numComGroups,
+                           const int                  numThreads,
+                           const InteractionSelection interactionSelection,
+                           const gmx_domdec_t*        domDec,
+                           const gmx_multisim_t*      commMultiSim,
+                           FILE*                      fplog) :
+    numEnergyGroups_(numEnergyGroups),
+    idefSelection_(ffparams),
+    threading_(std::make_unique<bonded_threading_t>(numThreads, numEnergyGroups, numComGroups, fplog)),
+    interactionSelection_(interactionSelection),
+    foreignEnergyGroups_(std::make_unique<gmx_grppairener_t>(numEnergyGroups)),
+    domDec_(domDec),
+    commMultiSim_(commMultiSim)
+{
+}
+
+ListedForces::ListedForces(ListedForces&& o) noexcept = default;
+
+ListedForces::~ListedForces() = default;
+
+//! Copies the selection interactions from \p idefSrc to \p idef
+static void selectInteractions(InteractionDefinitions*                   idef,
+                               const InteractionDefinitions&             idefSrc,
+                               const ListedForces::InteractionSelection& interactionSelection)
+{
+    const bool selectPairs =
+            interactionSelection.test(static_cast<int>(ListedForces::InteractionGroup::Pairs));
+    const bool selectDihedrals =
+            interactionSelection.test(static_cast<int>(ListedForces::InteractionGroup::Dihedrals));
+    const bool selectAngles =
+            interactionSelection.test(static_cast<int>(ListedForces::InteractionGroup::Angles));
+    const bool selectRest =
+            interactionSelection.test(static_cast<int>(ListedForces::InteractionGroup::Rest));
+
+    for (const auto ftype : gmx::EnumerationWrapper<InteractionFunction>{})
+    {
+        const t_interaction_function& ifunc = interaction_function[ftype];
+        if (ifunc.flags & IF_BOND)
+        {
+            bool assign = false;
+            if (ifunc.flags & IF_PAIR)
+            {
+                assign = selectPairs;
+            }
+            else if (ifunc.flags & IF_DIHEDRAL)
+            {
+                assign = selectDihedrals;
+            }
+            else if (ifunc.flags & IF_ATYPE)
+            {
+                assign = selectAngles;
+            }
+            else
+            {
+                assign = selectRest;
+            }
+            if (assign)
+            {
+                idef->il[ftype] = idefSrc.il[ftype];
+            }
+            else
+            {
+                idef->il[ftype].clear();
+            }
+        }
+    }
+}
+
+void ListedForces::setup(const InteractionDefinitions&             domainIdef,
+                         const int                                 numAtomsForce,
+                         const bool                                useGpu,
+                         const gmx::ArrayRef<const unsigned short> restraintComIndices)
+{
+    if (interactionSelection_.all())
+    {
+        // Avoid the overhead of copying all interaction lists by simply setting the reference to the domain idef
+        idef_ = &domainIdef;
+    }
+    else
+    {
+        idef_ = &idefSelection_;
+
+        selectInteractions(&idefSelection_, domainIdef, interactionSelection_);
+
+        idefSelection_.ilsort = domainIdef.ilsort;
+
+        if (interactionSelection_.test(static_cast<int>(ListedForces::InteractionGroup::Rest)))
+        {
+            idefSelection_.iparams_posres   = domainIdef.iparams_posres;
+            idefSelection_.iparams_fbposres = domainIdef.iparams_fbposres;
+        }
+        else
+        {
+            idefSelection_.iparams_posres.clear();
+            idefSelection_.iparams_fbposres.clear();
+        }
+    }
+
+    setup_bonded_threading(threading_.get(), numAtomsForce, useGpu, *idef_);
+
+    if (idef_->ilsort == ilsortFE_SORTED)
+    {
+        forceBufferLambda_.resize(numAtomsForce * sizeof(rvec4) / sizeof(real));
+        shiftForceBufferLambda_.resize(gmx::c_numShiftVectors);
+    }
+
+    restraintComIndices_ = restraintComIndices;
+}
+
+namespace
+{
+
+using gmx::ArrayRef;
+
+/*! \brief Return true if ftype is an explicit pair-listed LJ or
+ * COULOMB interaction type: bonded LJ (usually 1-4), or special
+ * listed non-bonded for FEP. */
+bool isPairInteraction(InteractionFunction ftype)
+{
+    return ((ftype) >= InteractionFunction::LennardJones14
+            && (ftype) <= InteractionFunction::LennardJonesCoulombNonBondedPairs);
+}
+
+/*! \brief Returns the bonded kernel flavor
+ *
+ * Note that energies are always requested when the virial
+ * is requested (performance gain would be small).
+ * Note that currently we do not have bonded kernels that
+ * do not compute forces.
+ */
+BondedKernelFlavor selectBondedKernelFlavor(const gmx::StepWorkload& stepWork,
+                                            const bool               useSimdKernels,
+                                            const bool               havePerturbedInteractions)
+{
+    BondedKernelFlavor flavor;
+    if (stepWork.computeEnergy || stepWork.computeVirial)
+    {
+        if (stepWork.computeVirial)
+        {
+            flavor = BondedKernelFlavor::ForcesAndVirialAndEnergy;
+        }
+        else
+        {
+            flavor = BondedKernelFlavor::ForcesAndEnergy;
+        }
+    }
+    else
+    {
+        if (useSimdKernels && !havePerturbedInteractions)
+        {
+            flavor = BondedKernelFlavor::ForcesSimdWhenAvailable;
+        }
+        else
+        {
+            flavor = BondedKernelFlavor::ForcesNoSimd;
+        }
+    }
+
+    return flavor;
+}
+
+/*! \brief Calculate one element of the list of bonded interactions
+    for this thread */
+real calc_one_bond(int                                 thread,
+                   InteractionFunction                 ftype,
+                   const InteractionDefinitions&       idef,
+                   ArrayRef<const int>                 iatoms,
+                   const bool                          havePerturbedInteractions,
+                   const WorkDivision&                 workDivision,
+                   const rvec                          x[],
+                   rvec4                               f[],
+                   rvec                                fshift[],
+                   const t_forcerec*                   fr,
+                   const t_pbc*                        pbc,
+                   gmx_grppairener_t*                  grpp,
+                   t_nrnb*                             nrnb,
+                   gmx::ArrayRef<const real>           lambda,
+                   gmx::ArrayRef<real>                 dvdl,
+                   gmx::ArrayRef<const real>           chargeA,
+                   gmx::ArrayRef<const real>           chargeB,
+                   gmx::ArrayRef<const bool>           atomIsPerturbed,
+                   gmx::ArrayRef<const unsigned short> cENER,
+                   const int                           numEnergyGroups,
+                   t_fcdata*                           fcd,
+                   const gmx::StepWorkload&            stepWork,
+                   int*                                global_atom_index)
+{
+    GMX_ASSERT(idef.ilsort == ilsortNO_FE || idef.ilsort == ilsortFE_SORTED,
+               "The topology should be marked either as no FE or sorted on FE");
+
+    BondedKernelFlavor flavor =
+            selectBondedKernelFlavor(stepWork, fr->use_simd_kernels, havePerturbedInteractions);
+    FreeEnergyPerturbationCouplingType efptFTYPE;
+    if (IS_RESTRAINT_TYPE(ftype))
+    {
+        efptFTYPE = FreeEnergyPerturbationCouplingType::Restraint;
+    }
+    else
+    {
+        efptFTYPE = FreeEnergyPerturbationCouplingType::Bonded;
+    }
+
+    const int nat1   = interaction_function[ftype].nratoms + 1;
+    const int nbonds = iatoms.ssize() / nat1;
+
+    GMX_ASSERT(fr->listedForcesGpu != nullptr
+                       || workDivision.end(static_cast<int>(ftype)) == iatoms.ssize(),
+               "The thread division should match the topology");
+
+    const int nb0 = workDivision.bound(ftype, thread);
+    const int nbn = workDivision.bound(ftype, thread + 1) - nb0;
+
+    ArrayRef<const t_iparams> iparams = idef.iparams;
+
+    real v = 0;
+    if (!isPairInteraction(ftype))
+    {
+        if (ftype == InteractionFunction::DihedralEnergyCorrectionMap)
+        {
+            /* TODO The execution time for CMAP dihedrals might be
+               nice to account to its own subtimer, but first
+               wallcycle needs to be extended to support calling from
+               multiple threads. */
+            v = cmap_dihs(nbn,
+                          iatoms.data() + nb0,
+                          iparams.data(),
+                          &idef.cmap_grid,
+                          x,
+                          f,
+                          fshift,
+                          pbc,
+                          lambda[static_cast<int>(efptFTYPE)],
+                          &(dvdl[static_cast<int>(efptFTYPE)]),
+                          chargeA,
+                          fcd,
+                          nullptr,
+                          nullptr,
+                          global_atom_index);
+        }
+        else
+        {
+            v = calculateSimpleBond(ftype,
+                                    nbn,
+                                    iatoms.data() + nb0,
+                                    iparams.data(),
+                                    x,
+                                    f,
+                                    fshift,
+                                    pbc,
+                                    lambda[static_cast<int>(efptFTYPE)],
+                                    &(dvdl[static_cast<int>(efptFTYPE)]),
+                                    chargeA,
+                                    fcd,
+                                    fcd->disres,
+                                    fcd->orires.get(),
+                                    global_atom_index,
+                                    flavor);
+        }
+    }
+    else
+    {
+        /* TODO The execution time for pairs might be nice to account
+           to its own subtimer, but first wallcycle needs to be
+           extended to support calling from multiple threads. */
+        do_pairs(ftype,
+                 nbn,
+                 iatoms.data() + nb0,
+                 iparams.data(),
+                 x,
+                 f,
+                 fshift,
+                 pbc,
+                 lambda.data(),
+                 dvdl.data(),
+                 chargeA,
+                 chargeB,
+                 atomIsPerturbed,
+                 cENER,
+                 numEnergyGroups,
+                 fr,
+                 havePerturbedInteractions,
+                 stepWork,
+                 grpp,
+                 global_atom_index);
+    }
+
+    if (thread == 0)
+    {
+        inc_nrnb(nrnb, nrnbIndex(static_cast<int>(ftype)), nbonds);
+    }
+
+    return v;
+}
+
+} // namespace
+
+//! Computes the position restraint forces, uses OpenMP parallelization
+static void calcPositionRestraintForces(const InteractionDefinitions& idef,
+                                        bonded_threading_t*           bt,
+                                        const bool                    needToClearThreadForceBuffers,
+                                        const rvec                    x[],
+                                        const t_pbc&                  pbc,
+                                        const t_forcerec*             fr,
+                                        const gmx::ArrayRef<const unsigned short> refScaleComIndices,
+                                        gmx::RVec*                virial,
+                                        gmx_enerdata_t*           enerd,
+                                        t_nrnb*                   nrnb,
+                                        gmx::ArrayRef<const real> lambda,
+                                        gmx::ArrayRef<real>       dvdl)
+{
+#pragma omp parallel for num_threads(bt->nthreads) schedule(static)
+    for (int thread = 0; thread < bt->nthreads; thread++)
+    {
+        try
+        {
+            auto& threadBuffer = bt->threadedForceBuffer.threadForceBuffer(thread);
+
+            auto& comBuffers = bt->centersOfMassScaledBuffers_[thread];
+
+            if (needToClearThreadForceBuffers)
+            {
+                threadBuffer.clearForcesAndEnergies();
+            }
+
+            gmx::ArrayRef<rvec4> forces = threadBuffer.forceBuffer();
+            // Thread 0 write directly to the output buffers
+            gmx::EnumerationArray<InteractionFunction, real>& epot =
+                    (thread == 0 ? enerd->term : threadBuffer.energyTerms());
+            gmx::RVec&          virialRef = (thread == 0 ? *virial : threadBuffer.diagonalVirial());
+            gmx::ArrayRef<real> dvdlRef   = (thread == 0 ? dvdl : threadBuffer.dvdl());
+
+            if (!idef.il[InteractionFunction::PositionRestraints].empty())
+            {
+                int bound0 = bt->workDivision.bound(InteractionFunction::PositionRestraints, thread);
+                int bound1 = bt->workDivision.bound(InteractionFunction::PositionRestraints, thread + 1);
+                auto iatoms = gmx::arrayRefFromArray(
+                        idef.il[InteractionFunction::PositionRestraints].iatoms.data() + bound0,
+                        bound1 - bound0);
+
+                epot[InteractionFunction::PositionRestraints] +=
+                        posres_wrapper(iatoms,
+                                       idef.iparams_posres,
+                                       pbc,
+                                       x,
+                                       lambda,
+                                       fr,
+                                       refScaleComIndices,
+                                       comBuffers.comA_,
+                                       comBuffers.comB_,
+                                       forces,
+                                       &virialRef,
+                                       &dvdlRef[int(FreeEnergyPerturbationCouplingType::Restraint)]);
+            }
+
+            if (!idef.il[InteractionFunction::FlatBottomedPositionRestraints].empty())
+            {
+                int bound0 = bt->workDivision.bound(
+                        InteractionFunction::FlatBottomedPositionRestraints, thread);
+                int bound1 = bt->workDivision.bound(
+                        InteractionFunction::FlatBottomedPositionRestraints, thread + 1);
+                auto iatoms = gmx::arrayRefFromArray(
+                        idef.il[InteractionFunction::FlatBottomedPositionRestraints].iatoms.data() + bound0,
+                        bound1 - bound0);
+
+                epot[InteractionFunction::FlatBottomedPositionRestraints] += fbposres_wrapper(
+                        iatoms, idef.iparams_fbposres, pbc, x, fr, refScaleComIndices, comBuffers.comA_, forces, &virialRef);
+            }
+        }
+        GMX_CATCH_ALL_AND_EXIT_WITH_FATAL_ERROR
+    }
+
+    inc_nrnb(nrnb,
+             eNR_POSRES,
+             gmx::exactDiv(idef.il[InteractionFunction::PositionRestraints].size(),
+                           1 + NRAL(InteractionFunction::PositionRestraints)));
+    inc_nrnb(nrnb,
+             eNR_FBPOSRES,
+             gmx::exactDiv(idef.il[InteractionFunction::FlatBottomedPositionRestraints].size(),
+                           1 + NRAL(InteractionFunction::FlatBottomedPositionRestraints)));
+}
+
+/*! \brief Compute the bonded part of the listed forces, parallelized over threads
+ */
+static void calcBondedForces(const InteractionDefinitions&       idef,
+                             bonded_threading_t*                 bt,
+                             const bool                          needToClearThreadForceBuffers,
+                             const rvec                          x[],
+                             const t_forcerec*                   fr,
+                             const t_pbc*                        pbc_null,
+                             rvec*                               fshiftMainBuffer,
+                             gmx_enerdata_t*                     enerd,
+                             t_nrnb*                             nrnb,
+                             gmx::ArrayRef<const real>           lambda,
+                             gmx::ArrayRef<real>                 dvdl,
+                             gmx::ArrayRef<const real>           chargeA,
+                             gmx::ArrayRef<const real>           chargeB,
+                             gmx::ArrayRef<const bool>           atomIsPerturbed,
+                             gmx::ArrayRef<const unsigned short> cENER,
+                             const int                           numEnergyGroups,
+                             t_fcdata*                           fcd,
+                             const gmx::StepWorkload&            stepWork,
+                             int*                                global_atom_index)
+{
+#pragma omp parallel for num_threads(bt->nthreads) schedule(static)
+    for (int thread = 0; thread < bt->nthreads; thread++)
+    {
+        try
+        {
+            auto& threadBuffer = bt->threadedForceBuffer.threadForceBuffer(thread);
+            /* thread stuff */
+            rvec*                                             fshift;
+            gmx::ArrayRef<real>                               dvdlt;
+            gmx::EnumerationArray<InteractionFunction, real>* epot;
+            gmx_grppairener_t*                                grpp;
+
+            if (needToClearThreadForceBuffers)
+            {
+                threadBuffer.clearForcesAndEnergies();
+            }
+
+            rvec4* ft = threadBuffer.forceBuffer().data();
+
+            /* Thread 0 writes directly to the main output buffers.
+             * We might want to reconsider this.
+             */
+            if (thread == 0)
+            {
+                fshift = fshiftMainBuffer;
+                epot   = &enerd->term;
+                grpp   = &enerd->grpp;
+                dvdlt  = dvdl;
+            }
+            else
+            {
+                fshift = as_rvec_array(threadBuffer.shiftForces().data());
+                epot   = &threadBuffer.energyTerms();
+                grpp   = &threadBuffer.groupPairEnergies();
+                dvdlt  = threadBuffer.dvdl();
+            }
+            /* Loop over all bonded force types to calculate the bonded forces */
+            for (const auto ftype : gmx::EnumerationWrapper<InteractionFunction>{})
+            {
+                const InteractionList& ilist = idef.il[ftype];
+                if (!ilist.empty() && ftype_is_bonded_potential(ftype))
+                {
+                    ArrayRef<const int> iatoms = gmx::makeConstArrayRef(ilist.iatoms);
+                    const bool          havePerturbedInteractions =
+                            (idef.ilsort == ilsortFE_SORTED
+                             && idef.numNonperturbedInteractions[ftype] < idef.il[ftype].size());
+                    real v = calc_one_bond(thread,
+                                           ftype,
+                                           idef,
+                                           iatoms,
+                                           havePerturbedInteractions,
+                                           bt->workDivision,
+                                           x,
+                                           ft,
+                                           fshift,
+                                           fr,
+                                           pbc_null,
+                                           grpp,
+                                           nrnb,
+                                           lambda,
+                                           dvdlt,
+                                           chargeA,
+                                           chargeB,
+                                           atomIsPerturbed,
+                                           cENER,
+                                           numEnergyGroups,
+                                           fcd,
+                                           stepWork,
+                                           global_atom_index);
+                    (*epot)[ftype] += v;
+                }
+            }
+        }
+        GMX_CATCH_ALL_AND_EXIT_WITH_FATAL_ERROR
+    }
+}
+
+bool ListedForces::haveRestraints(const t_fcdata& fcdata) const
+{
+    GMX_ASSERT(fcdata.disres, "NMR distance restraint object should be set up");
+
+    return (!idef_->il[InteractionFunction::PositionRestraints].empty()
+            || !idef_->il[InteractionFunction::FlatBottomedPositionRestraints].empty()
+            || fcdata.orires || fcdata.disres->nres > 0);
+}
+
+bool ListedForces::haveCpuBondeds() const
+{
+    return threading_->haveBondeds;
+}
+
+bool ListedForces::haveCpuListedForces(const t_fcdata& fcdata) const
+{
+    return haveCpuBondeds() || haveRestraints(fcdata);
+}
+
+namespace
+{
+
+/*! \brief Calculates all listed force interactions. */
+void calc_listed(struct gmx_wallcycle*               wcycle,
+                 const InteractionDefinitions&       idef,
+                 bonded_threading_t*                 bt,
+                 const bool                          needToClearThreadForceBuffers,
+                 const rvec                          x[],
+                 gmx::ForceOutputs*                  forceOutputs,
+                 const t_forcerec*                   fr,
+                 const t_pbc*                        pbc,
+                 gmx_enerdata_t*                     enerd,
+                 t_nrnb*                             nrnb,
+                 gmx::ArrayRef<const real>           lambda,
+                 gmx::ArrayRef<const real>           chargeA,
+                 gmx::ArrayRef<const real>           chargeB,
+                 gmx::ArrayRef<const bool>           atomIsPerturbed,
+                 gmx::ArrayRef<const unsigned short> cENER,
+                 const int                           numEnergyGroups,
+                 t_fcdata*                           fcd,
+                 int*                                global_atom_index,
+                 const gmx::StepWorkload&            stepWork)
+{
+    if (bt->haveBondeds)
+    {
+        gmx::ForceWithShiftForces& forceWithShiftForces = forceOutputs->forceWithShiftForces();
+
+        wallcycle_sub_start(wcycle, WallCycleSubCounter::Listed);
+        /* The dummy array is to have a place to store the dhdl at other values
+           of lambda, which will be thrown away in the end */
+        gmx::EnumerationArray<FreeEnergyPerturbationCouplingType, real> dvdl = { 0 };
+        calcBondedForces(idef,
+                         bt,
+                         needToClearThreadForceBuffers,
+                         x,
+                         fr,
+                         fr->bMolPBC ? pbc : nullptr,
+                         as_rvec_array(forceWithShiftForces.shiftForces().data()),
+                         enerd,
+                         nrnb,
+                         lambda,
+                         dvdl,
+                         chargeA,
+                         chargeB,
+                         atomIsPerturbed,
+                         cENER,
+                         numEnergyGroups,
+                         fcd,
+                         stepWork,
+                         global_atom_index);
+        wallcycle_sub_stop(wcycle, WallCycleSubCounter::Listed);
+
+        wallcycle_sub_start(wcycle, WallCycleSubCounter::ListedBufOps);
+        bt->threadedForceBuffer.reduce(
+                &forceWithShiftForces, &enerd->term, &enerd->grpp, dvdl, stepWork, 1);
+
+        if (stepWork.computeDhdl)
+        {
+            for (auto i : keysOf(enerd->dvdl_lin))
+            {
+                enerd->dvdl_nonlin[i] += dvdl[i];
+            }
+        }
+        wallcycle_sub_stop(wcycle, WallCycleSubCounter::ListedBufOps);
+    }
+
+    /* Copy the sum of violations for the distance restraints from fcd */
+    if (fcd)
+    {
+        enerd->term[InteractionFunction::DistanceRestraintViolations] = fcd->disres->sumviol;
+    }
+}
+
+/*! \brief As calc_listed(), but only determines the potential energy
+ * for the perturbed interactions.
+ *
+ * The shift forces in fr are not affected.
+ */
+void calc_listed_lambda(const InteractionDefinitions&                     idef,
+                        bonded_threading_t*                               bt,
+                        const rvec                                        x[],
+                        const t_forcerec*                                 fr,
+                        const struct t_pbc*                               pbc,
+                        gmx::ArrayRef<real>                               forceBufferLambda,
+                        gmx::ArrayRef<gmx::RVec>                          shiftForceBufferLambda,
+                        gmx_grppairener_t*                                grpp,
+                        gmx::EnumerationArray<InteractionFunction, real>& epot,
+                        gmx::ArrayRef<real>                               dvdl,
+                        t_nrnb*                                           nrnb,
+                        gmx::ArrayRef<const real>                         lambda,
+                        gmx::ArrayRef<const real>                         chargeA,
+                        gmx::ArrayRef<const real>                         chargeB,
+                        gmx::ArrayRef<const bool>                         atomIsPerturbed,
+                        gmx::ArrayRef<const unsigned short>               cENER,
+                        int                                               nPerturbed,
+                        t_fcdata*                                         fcd,
+                        int*                                              global_atom_index)
+{
+    GMX_ASSERT(idef.ilsort == ilsortFE_SORTED, "Must have sorted perturbed interactions to the end");
+
+    WorkDivision& workDivision = bt->foreignLambdaWorkDivision;
+
+    const t_pbc* pbc_null;
+    if (fr->bMolPBC)
+    {
+        pbc_null = pbc;
+    }
+    else
+    {
+        pbc_null = nullptr;
+    }
+
+    /* We already have the forces, so we use temp buffers here */
+    std::fill(forceBufferLambda.begin(), forceBufferLambda.end(), 0.0_real);
+    std::fill(shiftForceBufferLambda.begin(),
+              shiftForceBufferLambda.end(),
+              gmx::RVec{ 0.0_real, 0.0_real, 0.0_real });
+    rvec4* f      = reinterpret_cast<rvec4*>(forceBufferLambda.data());
+    rvec*  fshift = as_rvec_array(shiftForceBufferLambda.data());
+
+    /* Loop over all bonded force types to calculate the bonded energies */
+    for (const auto ftype : gmx::EnumerationWrapper<InteractionFunction>{})
+    {
+        if (ftype_is_bonded_potential(ftype))
+        {
+            const InteractionList& ilist = idef.il[ftype];
+            /* Create a temporary iatom list with only perturbed interactions */
+            const int           numNonperturbed = idef.numNonperturbedInteractions[ftype];
+            ArrayRef<const int> iatomsPerturbed = gmx::constArrayRefFromArray(
+                    ilist.iatoms.data() + numNonperturbed, ilist.size() - numNonperturbed);
+            if (!iatomsPerturbed.empty())
+            {
+                /* Set the work range of thread 0 to the perturbed bondeds */
+                workDivision.setBound(ftype, 0, 0);
+                workDivision.setBound(ftype, 1, iatomsPerturbed.ssize());
+
+                gmx::StepWorkload tempFlags;
+                tempFlags.computeEnergy              = true;
+                const bool havePerturbedInteractions = true;
+                real       v                         = calc_one_bond(0,
+                                       ftype,
+                                       idef,
+                                       iatomsPerturbed,
+                                       havePerturbedInteractions,
+                                       workDivision,
+                                       x,
+                                       f,
+                                       fshift,
+                                       fr,
+                                       pbc_null,
+                                       grpp,
+                                       nrnb,
+                                       lambda,
+                                       dvdl,
+                                       chargeA,
+                                       chargeB,
+                                       atomIsPerturbed,
+                                       cENER,
+                                       nPerturbed,
+                                       fcd,
+                                       tempFlags,
+                                       global_atom_index);
+                epot[ftype] += v;
+            }
+        }
+    }
+}
+
+} // namespace
+
+void ListedForces::calculate(struct gmx_wallcycle*                     wcycle,
+                             const matrix                              box,
+                             gmx::ArrayRefWithPadding<const gmx::RVec> coordinates,
+                             gmx::ArrayRef<const gmx::RVec>            xWholeMolecules,
+                             t_fcdata*                                 fcdata,
+                             const history_t*                          hist,
+                             gmx::ForceOutputs*                        forceOutputs,
+                             const t_forcerec*                         fr,
+                             const struct t_pbc*                       pbc,
+                             gmx_enerdata_t*                           enerd,
+                             t_nrnb*                                   nrnb,
+                             gmx::ArrayRef<const real>                 lambda,
+                             gmx::ArrayRef<const real>                 chargeA,
+                             gmx::ArrayRef<const real>                 chargeB,
+                             gmx::ArrayRef<const bool>                 atomIsPerturbed,
+                             gmx::ArrayRef<const unsigned short>       cENER,
+                             int                                       nPerturbed,
+                             int*                                      global_atom_index,
+                             const gmx::StepWorkload&                  stepWork)
+{
+    if (interactionSelection_.none() || !stepWork.computeListedForces)
+    {
+        return;
+    }
+
+    const InteractionDefinitions& idef = *idef_;
+
+    // Todo: replace all rvec use here with ArrayRefWithPadding
+    const rvec* x = as_rvec_array(coordinates.paddedArrayRef().data());
+
+    const bool calculateRestInteractions =
+            interactionSelection_.test(static_cast<int>(ListedForces::InteractionGroup::Rest));
+
+    /* Here we need to treat position restraints differently from other listed interactions.
+     * The virial from position restraints needs to be computed directly, not through shift
+     * forces as done for all other listed interactions. Position restraints also need full PBC.
+     * Thus we need to do two separate thread buffer force reductions when the virial is needed.
+     * When the virial is not needed, we do a single thread force buffer reduction.
+     */
+
+    bool needToClearThreadForceBuffers = true;
+
+    if (calculateRestInteractions && haveRestraints(*fcdata))
+    {
+        wallcycle_sub_start(wcycle, WallCycleSubCounter::Restraints);
+
+        if (!idef.il[InteractionFunction::PositionRestraints].empty()
+            || !idef.il[InteractionFunction::FlatBottomedPositionRestraints].empty())
+        {
+            // For position restraints we always need full pbc
+            t_pbc pbcPositionRestraints;
+            set_pbc(&pbcPositionRestraints, fr->pbcType, box);
+
+            gmx::RVec diagonalVirial = { 0.0_real, 0.0_real, 0.0_real };
+            // We need an intermediate array (with real=float) as enerd stores doubles
+            gmx::EnumerationArray<FreeEnergyPerturbationCouplingType, real> dvdl = { 0 };
+            calcPositionRestraintForces(idef,
+                                        threading_.get(),
+                                        needToClearThreadForceBuffers,
+                                        x,
+                                        pbcPositionRestraints,
+                                        fr,
+                                        restraintComIndices_,
+                                        &diagonalVirial,
+                                        enerd,
+                                        nrnb,
+                                        lambda,
+                                        dvdl);
+
+            if (stepWork.computeVirial)
+            {
+                forceOutputs->forceWithVirial().addVirialContribution(diagonalVirial);
+
+                threading_->threadedForceBuffer.reduce(
+                        &forceOutputs->forceWithVirial(), &enerd->term, &enerd->grpp, dvdl, stepWork, 1);
+
+                if (stepWork.computeDhdl)
+                {
+                    // Note that flat-bottomed posres is not perturbed, so only normal posres is here
+                    enerd->dvdl_nonlin[FreeEnergyPerturbationCouplingType::Restraint] +=
+                            dvdl[FreeEnergyPerturbationCouplingType::Restraint];
+                }
+
+                needToClearThreadForceBuffers = true;
+            }
+            else
+            {
+                needToClearThreadForceBuffers = false;
+            }
+        }
+
+        /* Do pre force calculation stuff which might require communication */
+        if (fcdata->orires)
+        {
+            GMX_ASSERT(!xWholeMolecules.empty(), "Need whole molecules for orientation restraints");
+            enerd->term[InteractionFunction::OrientationRestraintDeviations] =
+                    calc_orires_dev(commMultiSim_,
+                                    idef.il[InteractionFunction::OrientationRestraints].size(),
+                                    idef.il[InteractionFunction::OrientationRestraints].iatoms.data(),
+                                    idef.iparams.data(),
+                                    xWholeMolecules,
+                                    x,
+                                    fr->bMolPBC ? pbc : nullptr,
+                                    fcdata->orires.get());
+        }
+        if (fcdata->disres->nres > 0)
+        {
+            calc_disres_R_6(domDec_,
+                            commMultiSim_,
+                            idef.il[InteractionFunction::DistanceRestraints].size(),
+                            idef.il[InteractionFunction::DistanceRestraints].iatoms.data(),
+                            x,
+                            fr->bMolPBC ? pbc : nullptr,
+                            fcdata->disres,
+                            hist);
+        }
+
+        wallcycle_sub_stop(wcycle, WallCycleSubCounter::Restraints);
+    }
+
+    calc_listed(wcycle,
+                idef,
+                threading_.get(),
+                needToClearThreadForceBuffers,
+                x,
+                forceOutputs,
+                fr,
+                pbc,
+                enerd,
+                nrnb,
+                lambda,
+                chargeA,
+                chargeB,
+                atomIsPerturbed,
+                cENER,
+                numEnergyGroups_,
+                fcdata,
+                global_atom_index,
+                stepWork);
+
+    /* Check if we have to determine energy differences
+     * at foreign lambda's.
+     */
+    if (enerd->foreignLambdaTerms.numLambdas() > 0 && stepWork.computeDhdl)
+    {
+        gmx::EnumerationArray<FreeEnergyPerturbationCouplingType, real> dvdl = { 0 };
+        if (!idef.il[InteractionFunction::PositionRestraints].empty())
+        {
+            t_pbc pbcPositionRestraints;
+            set_pbc(&pbcPositionRestraints, fr->pbcType, box);
+
+            posres_wrapper_lambda(wcycle,
+                                  idef,
+                                  pbcPositionRestraints,
+                                  x,
+                                  enerd,
+                                  lambda,
+                                  fr,
+                                  restraintComIndices_,
+                                  threading_->centersOfMassScaledBuffers_[0].comA_,
+                                  threading_->centersOfMassScaledBuffers_[0].comB_);
+        }
+        if (idef.ilsort != ilsortNO_FE)
+        {
+            wallcycle_sub_start(wcycle, WallCycleSubCounter::ListedFep);
+            if (idef.ilsort != ilsortFE_SORTED)
+            {
+                gmx_incons("The bonded interactions are not sorted for free energy");
+            }
+            for (int i = 0; i < 1 + enerd->foreignLambdaTerms.numLambdas(); i++)
+            {
+                gmx::EnumerationArray<FreeEnergyPerturbationCouplingType, real> lam_i;
+                foreignEnergyGroups_->clear();
+                gmx::EnumerationArray<InteractionFunction, real> foreign_term = { 0 };
+                for (auto j : keysOf(lam_i))
+                {
+                    lam_i[j] = (i == 0 ? lambda[static_cast<int>(j)]
+                                       : enerd->foreignLambdaTerms.foreignLambdas(j)[i - 1]);
+                }
+                calc_listed_lambda(idef,
+                                   threading_.get(),
+                                   x,
+                                   fr,
+                                   pbc,
+                                   forceBufferLambda_,
+                                   shiftForceBufferLambda_,
+                                   foreignEnergyGroups_.get(),
+                                   foreign_term,
+                                   dvdl,
+                                   nrnb,
+                                   lam_i,
+                                   chargeA,
+                                   chargeB,
+                                   atomIsPerturbed,
+                                   cENER,
+                                   nPerturbed,
+                                   fcdata,
+                                   global_atom_index);
+                sum_epot(*foreignEnergyGroups_, foreign_term);
+                enerd->foreignLambdaTerms.accumulate(
+                        i, foreign_term[InteractionFunction::PotentialEnergy], dvdl);
+                std::fill(std::begin(dvdl), std::end(dvdl), 0.0);
+            }
+            wallcycle_sub_stop(wcycle, WallCycleSubCounter::ListedFep);
+        }
+    }
+}

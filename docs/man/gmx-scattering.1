@@ -1,0 +1,155 @@
+.\" Man page generated from reStructuredText.
+.
+.
+.nr rst2man-indent-level 0
+.
+.de1 rstReportMargin
+\\$1 \\n[an-margin]
+level \\n[rst2man-indent-level]
+level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
+-
+\\n[rst2man-indent0]
+\\n[rst2man-indent1]
+\\n[rst2man-indent2]
+..
+.de1 INDENT
+.\" .rstReportMargin pre:
+. RS \\$1
+. nr rst2man-indent\\n[rst2man-indent-level] \\n[an-margin]
+. nr rst2man-indent-level +1
+.\" .rstReportMargin post:
+..
+.de UNINDENT
+. RE
+.\" indent \\n[an-margin]
+.\" old: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.nr rst2man-indent-level -1
+.\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.in \\n[rst2man-indent\\n[rst2man-indent-level]]u
+..
+.TH "GMX-SCATTERING" "1" "Mar 06, 2026" "2026.1" "GROMACS"
+.SH NAME
+gmx-scattering \- Calculate small angle scattering profiles for SANS or SAXS
+.SH SYNOPSIS
+.INDENT 0.0
+.INDENT 3.5
+.sp
+.EX
+gmx scattering [\fB\-f\fP \fI[<.xtc/.trr/...>]\fP] [\fB\-s\fP \fI[<.tpr/.gro/...>]\fP]
+             [\fB\-n\fP \fI[<.ndx>]\fP] [\fB\-o\fP \fI[<.xvg>]\fP] [\fB\-b\fP \fI<time>\fP] [\fB\-e\fP \fI<time>\fP]
+             [\fB\-dt\fP \fI<time>\fP] [\fB\-tu\fP \fI<enum>\fP] [\fB\-fgroup\fP \fI<selection>\fP]
+             [\fB\-xvg\fP \fI<enum>\fP] [\fB\-[no]rmpbc\fP] [\fB\-[no]pbc\fP] [\fB\-sf\fP \fI<file>\fP]
+             [\fB\-selrpos\fP \fI<enum>\fP] [\fB\-seltype\fP \fI<enum>\fP] [\fB\-sel\fP \fI<selection>\fP]
+             [\fB\-startq\fP \fI<real>\fP] [\fB\-endq\fP \fI<real>\fP] [\fB\-qspacing\fP \fI<real>\fP]
+             [\fB\-binwidth\fP \fI<real>\fP] [\fB\-mc\-coverage\fP \fI<real>\fP] [\fB\-seed\fP \fI<int>\fP]
+             [\fB\-[no]norm\fP] [\fB\-[no]mc\fP] [\fB\-scattering\-type\fP \fI<enum>\fP]
+.EE
+.UNINDENT
+.UNINDENT
+.SH DESCRIPTION
+.sp
+\fBgmx scattering\fP calculates SANS and SAXS scattering curves using Debye method.
+.sp
+The scattering intensity, I(q), as a function of scattering angle q
+with averaging over frames.
+.sp
+Note that this is a new implementation of the SANS/SAXS utilities added in
+GROMACS 2024. If you need the old ones,
+use \fBgmx sans\-legacy\fP or \fBgmx saxs\-legacy\fP\&.
+.SH OPTIONS
+.sp
+Options to specify input files:
+.INDENT 0.0
+.TP
+.B \fB\-f\fP [<.xtc/.trr/...>] (traj.xtc) (Optional)
+Input trajectory or single configuration: \fI\%xtc\fP \fI\%trr\fP \fI\%cpt\fP \fI\%gro\fP \fI\%g96\fP \fI\%pdb\fP \fI\%tng\fP h5md
+.TP
+.B \fB\-s\fP [<.tpr/.gro/...>] (topol.tpr) (Optional)
+Input structure: \fI\%tpr\fP \fI\%gro\fP \fI\%g96\fP \fI\%pdb\fP brk ent
+.TP
+.B \fB\-n\fP [<.ndx>] (index.ndx) (Optional)
+Extra index groups
+.UNINDENT
+.sp
+Options to specify output files:
+.INDENT 0.0
+.TP
+.B \fB\-o\fP [<.xvg>] (scattering.xvg) (Optional)
+scattering intensity as a function of q
+.UNINDENT
+.sp
+Other options:
+.INDENT 0.0
+.TP
+.B \fB\-b\fP <time> (0)
+First frame (ps) to read from trajectory
+.TP
+.B \fB\-e\fP <time> (0)
+Last frame (ps) to read from trajectory
+.TP
+.B \fB\-dt\fP <time> (0)
+Only use frame if t MOD dt == first time (ps)
+.TP
+.B \fB\-tu\fP <enum> (ps)
+Unit for time values: fs, ps, ns, us, ms, s
+.TP
+.B \fB\-fgroup\fP <selection>
+Atoms stored in the trajectory file (if not set, assume first N atoms)
+.TP
+.B \fB\-xvg\fP <enum> (xmgrace)
+Plot formatting: xmgrace, xmgr, none
+.TP
+.B \fB\-[no]rmpbc\fP  (yes)
+Make molecules whole for each frame
+.TP
+.B \fB\-[no]pbc\fP  (yes)
+Use periodic boundary conditions for distance calculation
+.TP
+.B \fB\-sf\fP <file>
+Provide selections from files
+.TP
+.B \fB\-selrpos\fP <enum> (atom)
+Selection reference positions: atom, res_com, res_cog, mol_com, mol_cog, whole_res_com, whole_res_cog, whole_mol_com, whole_mol_cog, part_res_com, part_res_cog, part_mol_com, part_mol_cog, dyn_res_com, dyn_res_cog, dyn_mol_com, dyn_mol_cog
+.TP
+.B \fB\-seltype\fP <enum> (atom)
+Default selection output positions: atom, res_com, res_cog, mol_com, mol_cog, whole_res_com, whole_res_cog, whole_mol_com, whole_mol_cog, part_res_com, part_res_cog, part_mol_com, part_mol_cog, dyn_res_com, dyn_res_cog, dyn_mol_com, dyn_mol_cog
+.TP
+.B \fB\-sel\fP <selection>
+Selection for Scattering calculation
+.TP
+.B \fB\-startq\fP <real> (0)
+smallest q value (1/nm)
+.TP
+.B \fB\-endq\fP <real> (2)
+largest q value (1/nm)
+.TP
+.B \fB\-qspacing\fP <real> (0.01)
+spacing of q values (1/nm)
+.TP
+.B \fB\-binwidth\fP <real> (0.1)
+Bin width (nm) for P(r)
+.TP
+.B \fB\-mc\-coverage\fP <real> (0.2)
+coverage of Monte Carlo (%)
+.TP
+.B \fB\-seed\fP <int> (2023)
+random seed for Monte Carlo
+.TP
+.B \fB\-[no]norm\fP  (no)
+normalize scattering intensities
+.TP
+.B \fB\-[no]mc\fP  (yes)
+use Monte Carlo to scattering intensities
+.TP
+.B \fB\-scattering\-type\fP <enum> (sans)
+Scattering type: saxs, sans
+.UNINDENT
+.SH SEE ALSO
+.sp
+\fBgmx(1)\fP
+.sp
+More information about GROMACS is available at <\X'tty: link http://www.gromacs.org/'\fI\%http://www.gromacs.org/\fP\X'tty: link'>.
+.SH COPYRIGHT
+2026, GROMACS development team
+.\" Generated by docutils manpage writer.
+.

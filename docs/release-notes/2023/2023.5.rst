@@ -1,0 +1,145 @@
+GROMACS 2023.5 release notes
+----------------------------
+
+This version was released on May 3rd, 2024. These release notes
+document the changes that have taken place in |Gromacs| since the
+previous 2023.4 version, to fix known issues. It also incorporates all
+fixes made in version 2022.6 and earlier, which you can find described
+in the :ref:`release-notes`.
+
+.. Note to developers!
+   Please use """"""" to underline the individual entries for fixed issues in the subfolders,
+   otherwise the formatting on the webpage is messed up.
+   Also, please use the syntax :issue:`number` to reference issues on GitLab, without
+   a space between the colon and number!
+
+Fixes where mdrun could behave incorrectly
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The Verlet buffer estimate could be wrong with initial coordinates out of the box
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Due to incorrect periodic boundary treatment in the density estimate for
+the Verlet buffer calculation, the Verlet buffer could be off when many atoms
+were outside the rectangular unit cell. In nearly all cases this would lead
+to a slightly too large buffer and almost never to a too short buffer.
+
+:issue:`5002`
+
+With energy minimization, dispersion correction energies were double counted
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+The only affected the reported energies, as dispersion correction does not
+affect the forces on the atoms.
+
+:issue:`5031`
+
+Correct forces with virtual_sites1
+""""""""""""""""""""""""""""""""""
+
+Virtual sites with a single constructing atom did not have their
+force distributed to the constructing atom. This likely did not cause
+silent errors, as this completely defeats the purpose of such virtual
+sites.
+
+:issue:`4978`
+
+Avoid rounding errors with Parrinello-Rahman coupling of triclinic boxes
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+With triclinic boxes and isotropic or diagonal Parrinello-Rahman pressure
+coupling, the off-diagonal scaling matrix arguments could be non-zero.
+This was harmless, apart from causing an assertion failure when update
+was executed on a GPU.
+
+:issue:`4974`
+
+Add checks for the combination of multiple time stepping and SD integrator
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+The documentation says that this combination is not supported, but the check
+for this in grompp was lost. Now both grompp and mdrun will exit with an error.
+
+:issue:`3775`
+:issue:`5053`
+
+Correct dH/dlambda with MTS and perturbed constraints
+"""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+When doing free-energy calculations with multiple time stepping and perturbed
+constraint lengths, the slow force contributions to dH/dlambda were incorrectly
+multiplied by the MTS factor. The effect of this is usually rather small
+when only integrating the PME grid part less frequently, but can be substantial
+when the non-bonded pair interactions are not integrated at every step.
+
+:issue:`5060`
+
+Fixes for ``gmx`` tools
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Fix grompp crash with atoms far out of the box
+""""""""""""""""""""""""""""""""""""""""""""""
+
+The Verlet buffer tolerance code did not put atoms correctly in the box,
+which could lead to illegal memory access in grompp
+
+:issue:`5002`
+
+Fix LJ combination rules mixup in nonbonded-benchmark tool
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+The gmx nonbonded-benchmark tool would use geometric LH combination rules instead
+of Lorentz-Berthelot and Lorentz-Berthelot instead of no combination rules.
+
+:issue:`4963`
+
+Fix ``make_ndx`` behavior with splitres
+"""""""""""""""""""""""""""""""""""""""
+
+Since |Gromacs| 2023, ``gmx make_ndx`` would only output the first atom
+in each residue when using ``splitres`` command. Now the old behavior
+is restored, where all atoms in the residue are printed.
+
+:issue:`5049`
+
+Fix invalid memory access in ``gmx make_ndx`` when using splitres/splitat
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Could manifest in application crashes or garbled output data (for example,
+the output group names had empty prefix).
+
+:issue:`5050`
+
+Fixed references to old tool names in some commands
+"""""""""""""""""""""""""""""""""""""""""""""""""""
+
+There were references to old tool names, e.g., g_energy and g_bar in some
+commands.
+
+:issue:`5074`
+
+Fixes that affect portability
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Use RDTIME instead of RDCYCLE on RISC-V
+"""""""""""""""""""""""""""""""""""""""
+
+Starting with Linux 6.6, the ``rdcycle`` instruction cannot be called from
+userland for security reasons, making |Gromacs| fail with ``SIGILL``.
+Now it is replaced with ``rdtime``.
+
+
+:issue:`4967`
+
+Miscellaneous
+^^^^^^^^^^^^^
+
+Fix crashes with GPU direct communication for some atypical run configurations
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+When GPU direct communication was used in combination with atypical
+run conditions (e.g. many thread-MPI tasks on each GPU), crashes could
+occur when the tasks became very out of sync. This has now been made
+more robust.
+
+:issue:`5024`

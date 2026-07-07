@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="referencedata.xsl"?>
+<ReferenceData>
+  <PathToTest Name="simpledir/traj">
+    <Bool Name="extensionMatchesPdb">false</Bool>
+    <String Name="stripExtension">simpledir/traj</String>
+    <String Name="concatenateBeforeExtension">simpledir/traj_34</String>
+  </PathToTest>
+</ReferenceData>

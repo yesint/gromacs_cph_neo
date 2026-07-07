@@ -1,0 +1,186 @@
+.\" Man page generated from reStructuredText.
+.
+.
+.nr rst2man-indent-level 0
+.
+.de1 rstReportMargin
+\\$1 \\n[an-margin]
+level \\n[rst2man-indent-level]
+level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
+-
+\\n[rst2man-indent0]
+\\n[rst2man-indent1]
+\\n[rst2man-indent2]
+..
+.de1 INDENT
+.\" .rstReportMargin pre:
+. RS \\$1
+. nr rst2man-indent\\n[rst2man-indent-level] \\n[an-margin]
+. nr rst2man-indent-level +1
+.\" .rstReportMargin post:
+..
+.de UNINDENT
+. RE
+.\" indent \\n[an-margin]
+.\" old: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.nr rst2man-indent-level -1
+.\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.in \\n[rst2man-indent\\n[rst2man-indent-level]]u
+..
+.TH "GMX-HBOND" "1" "Mar 06, 2026" "2026.1" "GROMACS"
+.SH NAME
+gmx-hbond \- Compute and analyze hydrogen bonds.
+.SH SYNOPSIS
+.INDENT 0.0
+.INDENT 3.5
+.sp
+.EX
+gmx hbond [\fB\-f\fP \fI[<.xtc/.trr/...>]\fP] [\fB\-s\fP \fI[<.tpr/.gro/...>]\fP] [\fB\-n\fP \fI[<.ndx>]\fP]
+          [\fB\-o\fP \fI[<.ndx>]\fP] [\fB\-num\fP \fI[<.xvg>]\fP] [\fB\-dist\fP \fI[<.xvg>]\fP]
+          [\fB\-ang\fP \fI[<.xvg>]\fP] [\fB\-dan\fP \fI[<.xvg>]\fP] [\fB\-b\fP \fI<time>\fP] [\fB\-e\fP \fI<time>\fP]
+          [\fB\-dt\fP \fI<time>\fP] [\fB\-tu\fP \fI<enum>\fP] [\fB\-fgroup\fP \fI<selection>\fP]
+          [\fB\-xvg\fP \fI<enum>\fP] [\fB\-[no]rmpbc\fP] [\fB\-[no]pbc\fP] [\fB\-sf\fP \fI<file>\fP]
+          [\fB\-selrpos\fP \fI<enum>\fP] [\fB\-seltype\fP \fI<enum>\fP] [\fB\-r\fP \fI<selection>\fP]
+          [\fB\-t\fP \fI<selection>\fP] [\fB\-[no]m\fP] [\fB\-[no]pf\fP] [\fB\-cutoff\fP \fI<real>\fP]
+          [\fB\-hbr\fP \fI<real>\fP] [\fB\-hba\fP \fI<real>\fP] [\fB\-de\fP \fI<string>\fP] [\fB\-ae\fP \fI<string>\fP]
+.EE
+.UNINDENT
+.UNINDENT
+.SH DESCRIPTION
+.sp
+\fBgmx hbond\fP allows using geometric definition of hydrogen bonds to define them throughout the structure.
+.sp
+\fB\-r\fP specifies reference selection, relative to which the search for hydrogen bonds in target selection will develop. Note that all atoms in reference and target selections should be either absolutely identical or non\-overlapping at all. Accepts dynamic selection.
+.sp
+\fB\-t\fP specifies target selection, relative to which the search for hydrogen bonds in reference selection will develop. Note that all atoms in reference and target selections should be either absolutely identical or non\-overlapping at all. Accepts dynamic selection.
+.sp
+\fB\-m\fP forces to merge together information in output index file about hydrogen bonds if they differ only in hydrogen indices. This also means that information about hydrogen atoms in the hydrogen bonds would not be written in output index file at all.
+.sp
+\fB\-pf\fP forces to write hydrogen bonds for each frame separately instead of writing hydrogen bonds for the whole system. Each information about hydrogen bonds in new frame will be stored in its own section of the output index file.
+.sp
+\fB\-cutoff\fP is a real value that defines distance from donor to acceptor (and vice versa) that used in neighbor search. Minimum (and also recommended) value is 0.35.
+.sp
+\fB\-hbr\fP Sets the cutoff that is used when calculating hydrogen bond distances. Recommended value: 0.35.
+.sp
+\fB\-hba\fP Sets the cutoff that is used when calculating hydrogen bond angles. Recommended value: 30.
+.sp
+\fB\-de\fP Specifies the atomic elements that will be selected from the topology to check if a given element is a potential hydrogen bond donor.
+.sp
+\fB\-ae\fP Specifies the atomic elements that will be selected from the topology to check if a given element is a potential hydrogen bond acceptor.
+.sp
+\fB\-num\fP allows you to get a plot of the number of hydrogen bonds as a function of time at the output.
+.sp
+\fB\-dist\fP allows you to get a plot of the distance distribution of all hydrogen bonds at the output.
+.sp
+\fB\-ang\fP allows you to get a plot of the angular distribution of all hydrogen bonds at the output.
+.sp
+\fB\-dan\fP allows you to get a plot of the number of analyzed donors and acceptors for each frame at the output.
+.sp
+Note that this is a new implementation of the hbond utility added in
+GROMACS 2024. If you need the old one, use \fBgmx hbond\-legacy\fP\&.
+.SH OPTIONS
+.sp
+Options to specify input files:
+.INDENT 0.0
+.TP
+.B \fB\-f\fP [<.xtc/.trr/...>] (traj.xtc) (Optional)
+Input trajectory or single configuration: \fI\%xtc\fP \fI\%trr\fP \fI\%cpt\fP \fI\%gro\fP \fI\%g96\fP \fI\%pdb\fP \fI\%tng\fP h5md
+.TP
+.B \fB\-s\fP [<.tpr/.gro/...>] (topol.tpr) (Optional)
+Input structure: \fI\%tpr\fP \fI\%gro\fP \fI\%g96\fP \fI\%pdb\fP brk ent
+.TP
+.B \fB\-n\fP [<.ndx>] (index.ndx) (Optional)
+Extra index groups
+.UNINDENT
+.sp
+Options to specify output files:
+.INDENT 0.0
+.TP
+.B \fB\-o\fP [<.ndx>] (hbond.ndx)
+Index file that contains selected groups\(aq, acceptors\(aq, donors\(aq and hydrogens\(aq indices and hydrogen bond pairs between or within selected groups.
+.TP
+.B \fB\-num\fP [<.xvg>] (hbnum.xvg) (Optional)
+Number of hydrogen bonds as a function of time.
+.TP
+.B \fB\-dist\fP [<.xvg>] (hbdist.xvg) (Optional)
+Distance distribution of all hydrogen bonds.
+.TP
+.B \fB\-ang\fP [<.xvg>] (hbang.xvg) (Optional)
+Angle distribution of all hydrogen bonds.
+.TP
+.B \fB\-dan\fP [<.xvg>] (hbdan.xvg) (Optional)
+Number of donors and acceptors analyzed for each frame.
+.UNINDENT
+.sp
+Other options:
+.INDENT 0.0
+.TP
+.B \fB\-b\fP <time> (0)
+First frame (ps) to read from trajectory
+.TP
+.B \fB\-e\fP <time> (0)
+Last frame (ps) to read from trajectory
+.TP
+.B \fB\-dt\fP <time> (0)
+Only use frame if t MOD dt == first time (ps)
+.TP
+.B \fB\-tu\fP <enum> (ps)
+Unit for time values: fs, ps, ns, us, ms, s
+.TP
+.B \fB\-fgroup\fP <selection>
+Atoms stored in the trajectory file (if not set, assume first N atoms)
+.TP
+.B \fB\-xvg\fP <enum> (xmgrace)
+Plot formatting: xmgrace, xmgr, none
+.TP
+.B \fB\-[no]rmpbc\fP  (yes)
+Make molecules whole for each frame
+.TP
+.B \fB\-[no]pbc\fP  (yes)
+Use periodic boundary conditions for distance calculation
+.TP
+.B \fB\-sf\fP <file>
+Provide selections from files
+.TP
+.B \fB\-selrpos\fP <enum> (atom)
+Selection reference positions: atom, res_com, res_cog, mol_com, mol_cog, whole_res_com, whole_res_cog, whole_mol_com, whole_mol_cog, part_res_com, part_res_cog, part_mol_com, part_mol_cog, dyn_res_com, dyn_res_cog, dyn_mol_com, dyn_mol_cog
+.TP
+.B \fB\-seltype\fP <enum> (atom)
+Default selection output positions: atom, res_com, res_cog, mol_com, mol_cog, whole_res_com, whole_res_cog, whole_mol_com, whole_mol_cog, part_res_com, part_res_cog, part_mol_com, part_mol_cog, dyn_res_com, dyn_res_cog, dyn_mol_com, dyn_mol_cog
+.TP
+.B \fB\-r\fP <selection>
+Reference selection, relative to which the search for hydrogen bonds in target selection will develop.
+.TP
+.B \fB\-t\fP <selection>
+Target selection, relative to which the search for hydrogen bonds in reference selection will develop.
+.TP
+.B \fB\-[no]m\fP  (no)
+Merge together information about hydrogen bonds if they differ only in hydrogen indices.
+.TP
+.B \fB\-[no]pf\fP  (no)
+Write hydrogen bonds for each frame separately instead of writing hydrogen bonds for the whole system.
+.TP
+.B \fB\-cutoff\fP <real> (0.35)
+Distance from donor to acceptor (and vice versa) that used in neighbor search (nm). Must be > 0.
+.TP
+.B \fB\-hbr\fP <real> (0.35)
+Hydrogen bond cutoff distance, between donor and acceptor (nm). The value must not exceed the neighbor search cutoff and must be > 0.
+.TP
+.B \fB\-hba\fP <real> (30)
+A\-D\-H hydrogen bond cutoff angle (degrees). Must be > 0.
+.TP
+.B \fB\-de\fP <string> (N O)
+Donor elements. Default elements: N, O.
+.TP
+.B \fB\-ae\fP <string> (N O)
+Acceptor elements. Default elements: N, O.
+.UNINDENT
+.SH SEE ALSO
+.sp
+\fBgmx(1)\fP
+.sp
+More information about GROMACS is available at <\X'tty: link http://www.gromacs.org/'\fI\%http://www.gromacs.org/\fP\X'tty: link'>.
+.SH COPYRIGHT
+2026, GROMACS development team
+.\" Generated by docutils manpage writer.
+.

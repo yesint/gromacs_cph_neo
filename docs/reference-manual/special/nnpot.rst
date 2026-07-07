@@ -1,0 +1,128 @@
+.. _nnpot:
+
+Neural Network Potentials
+------------------------------------
+
+The NNPot module allows the use of potentials based on neural networks or
+machine learning in general. These models can be trained to reproduce forces
+and energies at *ab initio* levels of accuracy, based on training data from
+electronic structure calculations with e.g. DFT or CCSD(T). They take atomic
+descriptors as their input, most commonly the atom positions and atomic numbers,
+and output a value for the potential energy of the given conformation. The forces
+can then be calculated by backpropagating the gradients through the machine
+learning model (e.g. PyTorchs AutoGrad engine), w.r.t. the inputs.
+Currently, only models trained in `PyTorch <https://pytorch.org/>`_,
+exported using its TorchScript functionality, are supported.
+
+Hybrid NNP/MM Simulations
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The NNPot interface also supports hybrid NNP/MM simulations, where only a small
+subsystem is modeled with the neural network potential, and the rest of the system
+is modeled using regular force fields. The embedding scheme used is analoguous
+to the additive mechanical embedding scheme in QM/MM simulations, where the total
+energy of the system is expressed as :math:`E_{tot} = E_{NNP} + E_{MM} + E_{NNP-MM}`,
+where :math:`E_{NNP}` describes the energy predicted by the model for the NNP subsystem,
+:math:`E_{MM}` describes all other interactions calculated using the classical MM
+force field. The coupling term :math:`E_{NNP-MM}` term includes non-bonded electrostatic
+and LJ interactions between the atoms in the NNP and MM regions, calculated as usual
+in |Gromacs|. An exception to this is when the NNP model itself calculates the electrostatic
+interactions, in which case the coupling term only includes the LJ interactions.
+Bonded interactions are also described on the MM level, removing terms
+consisting of bonds containing 2 NNP atoms, angles and settles containing 2 or 3 NNP atoms,
+and dihedrals containing 3 or 4 NNP atoms. Broken chemical bonds between NNP and MM atoms
+are capped with a link atom, as is usual in QM/MM simulations. The link atom is placed at
+a fixed distance from the NNP atom along the vector pointing towards the MM atom, and
+the force acting on it is redistributed to the NNP and MM atoms, as if it was a 2FD-type
+virtual site. The type of link atom and the distance from the NNP atom can be specified
+via :ref:`mdp` options, see below. All necessary modifications to the system topology
+are performed automatically during :ref:`gmx grompp` preprocessing.
+
+Software Prerequisites
+^^^^^^^^^^^^^^^^^^^^^^
+
+To perform simulations with the NNPot module, |Gromacs| needs to be linked with
+a `LibTorch installation <https://pytorch.org/get-started/locally/>`_ (version
+2.0 or higher). For specific installations instructions please see
+`this section <installing with Neural Network potential support>` of the install guide.
+
+Usage
+^^^^^
+
+Simulations using the NNPot interface are controlled by setting :ref:`mdp` file options.
+For a detailed description of all available options, please see the
+:ref:`mdp options documentation<mdp-nnpot>`.
+The inputs are passed to the model in order of their occurence in the mdp file. Note
+that there are no default values for the model input, so not specifying the model
+input will lead to errors. The model is expected to return a tensor containing the energy
+of the system and, optionally, a tensor containing the forces on the input atoms.
+This option can be useful for cases in which the forces can be computed by the model
+by some technique that is more efficient than via backpropagation. If the model does not
+provide its own forces, they are calculated by the interface as gradients
+w.r.t. the *first* input tensor. In the case of :mdp-value:`electrostatic-model` embedding,
+forces on the NNP as well as MM atoms should be returned. \
+By default, |Gromacs| will run inference on the GPU, if available. You can also explicitly
+specify the device on which you wish to run model inference using the environment
+variable ``GMX_NN_DEVICE``. The options ``cpu`` and ``gpu`` are supported. Option ``cuda``
+is deprecated, and is treated as ``gpu``.
+If multiple GPUs are available, the active device will be inherited from mdrun.
+For ``gpu``, a CUDA/HIP-aware LibTorch installation should be installed, and the
+corresponding CUDA/HIP installation should be available in your ``PATH``. 
+
+Find below an example Python code snippet to export a pretrained model in
+PyTorch using TorchScript. As an example, we use the popular ANI models
+available from `TorchANI <https://github.com/aiqm/torchani/>`_. 
+
+::
+
+    import torch
+    from torch import nn
+    from torchani.models import ANI2x
+    from typing import Optional
+
+    class GmxNNPotModelWrapper(nn.Module):
+        def __init__(self):
+            super().__init__()
+
+            # Load a pre-trained ANI-2x model
+            self.model = ANI2x(periodic_table_index=True)
+
+            # GROMACS and TorchANI use different unit conventions
+            self.length_conversion = 10.0   # nm --> Å
+            self.energy_conversion = 2625.5 # Hartree --> kJ/mol
+
+        def forward(self, positions, atomic_numbers, 
+                    box: Optional[torch.Tensor]=None, pbc: Optional[torch.Tensor]=None):
+            
+            # Prepare the inputs for the model
+            atomic_numbers = atomic_numbers.unsqueeze(0)
+            positions = positions.unsqueeze(0) * self.length_conversion
+            if box is not None:
+                box *= self.length_conversion
+
+            # Forward pass
+            result = self.model((atomic_numbers, positions), box, pbc)
+
+            energy = result.energies[0] * self.energy_conversion
+
+            return energy
+        
+    model = GmxNNPotModelWrapper()
+
+    save_path = 'ani2x.pt'
+    torch.jit.script(model).save(save_path)
+
+The model can then be used in |Gromacs| by specifying the path to the saved model.
+Take care that the LibTorch version linked to |Gromacs| matches the one that
+was used to train/export the model.
+In the :ref:`mdp` file, the relevant options could look like:
+
+::
+
+    nnpot-active          = true
+    nnpot-modelfile       = ani2x.pt
+    nnpot-input-group     = System
+    nnpot-model-input1    = atom-positions
+    nnpot-model-input2    = atom-numbers
+    nnpot-model-input3    = box
+    nnpot-model-input4    = pbc

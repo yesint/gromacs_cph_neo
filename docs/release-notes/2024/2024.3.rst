@@ -1,0 +1,195 @@
+GROMACS 2024.3 release notes
+----------------------------
+
+This version was released on August 29th, 2024. These release notes
+document the changes that have taken place in |Gromacs| since the
+previous 2024.2 version, to fix known issues. It also incorporates all
+fixes made in version 2023.5 and earlier, which you can find described
+in the :ref:`release-notes`.
+
+.. Note to developers!
+   Please use """"""" to underline the individual entries for fixed issues in the subfolders,
+   otherwise the formatting on the webpage is messed up.
+   Also, please use the syntax :issue:`number` to reference issues on GitLab, without
+   a space between the colon and number!
+
+Fixes where mdrun could behave incorrectly
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Remove double dispersion correction with MTTK barostat
+""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+When the MTTK barostat was used with dispersion correction, the
+pressure correction was applied twice. This caused the density to be
+too high.
+
+:issue:`5072`
+
+Correct zero Verlet buffer for system with only large masses
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+For system with most masses much larger than zero, the Verlet buffer
+estimate could be zero. Coarse-grained simulations could be affected
+by this issue.
+
+:issue:`5098`
+
+Fix incorrect energy group pair assignment of pair interactions
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Energies for bonded pair interactions, typically 1-4 interactions, would
+be assigned to incorrect energy group pairs. With free-energy calculations
+this could lead to illegal memory access.
+
+:issue:`5109`
+
+Correct AWH metric with free-energy and Beutler soft-core
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+The AWH metric was incorrect for free-energy dimensions when
+Beutler soft-core interactions were used. The free-energies
+themselves were unaffected by this issue.
+
+:issue:`5107`
+
+Implement Lennard-Jones force-switch in free-energy kernel
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Perturbed non-bonded Lennard-Jones interactions would use plain cut-off
+with potential shift when force-switch was specified. The errors this
+causes on the potential and force are negligible with the typical Charmm
+setup. When (de)coupling a complete, dense system there is a measurable
+error in the pressure, but this is again negligible when coupling
+a single molecule.
+
+:issue:`5016`
+
+mdrun now computes the initial bonded distances with periodic molecules
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+When using periodic molecules, mdrun could quit with an error message
+about multiple assignments of bonded interactions telling the user to
+report the issue. The actual source of this was that mdrun did not
+determine the communication distance required for bonded interactions.
+Now this distance is determined.
+
+:issue:`5086`
+
+Avoid using invalid device streams
+""""""""""""""""""""""""""""""""""
+
+Issue has only been seen via assertions in the GCC 13 standard
+library that guard against null-pointer dereferences.
+The dereferenced null pointers were never used in actual
+simulations.
+
+:issue:`5087`
+
+Fix masks and alignment checks in Arm SVE SIMD
+""""""""""""""""""""""""""""""""""""""""""""""
+
+The double precision SVE implementation contained an incorrect mask
+for SVE implementations of 256 bits or more. This would lead to instantaneous
+extreme forces/crashes on the first step, so it should never have
+influenced any production simulations unnoticed. The alignment checks for
+some SVE routines have also been modified to correspond to the SIMD width,
+although this is formally not required on Arm, so it will not have caused
+any errors.
+
+:issue:`5080`
+:issue:`5120`
+
+Added an assert to ensure valid cutoff when calculating atom density
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Simulations with :mdp:`rvdw` and :mdp:`rcoulomb` set to 0 could crash
+with a segmentation fault when calculating the effective atom density.
+This is now handled by asserting valid values and halting with a proper
+explanation.
+
+:issue:`5095`
+
+Fixes for ``gmx`` tools
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Permit ``gmx tune_pme`` to understand ``md.log`` files
+""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+The format of ``md.log`` files changed in 2024 which broke the ability of
+``gmx tune_pme`` to understand how previous runs worked by parsing that
+file. Now ``gmx tune_pme`` understands better.
+
+Avoid crash of convert-tpr on velocity-less tpr files
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+The convert-tpr now works on tpr files that do not contain velocities,
+as generated for, e.g., energy minimization.
+
+:issue:`5080`
+
+Avoid premature termination when using ``gmx hbond``
+""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Fixed an error that caused gmx hbond to prematurely terminate if there were no donors or acceptors of hydrogen bonds in the chosen selection.
+
+:issue:`5059`
+:issue:`4985`
+
+Add grompp warning about zero AWH cover diameter when sharing a bias
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Fix TPR generation with Andersen Massive thermostat and constraints
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+A restriction to not generate TPR files for the Andersen thermostat with constraints was incorrectly applied to also the Andersen Massive thermostat.
+
+:issue:`5093`
+
+Fixed filenames of generated CP2K files in QMMM MdModule
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+If there were no files provided with ``grompp -qmi`` option, module used ``topol/_cp2k.inp`` instead of ``topol_cp2k.inp``
+
+Added a check in ``gmx grompp`` to ensure that cutoffs are valid
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+At least one of :mdp:`rvdw` and :mdp:`rcoulomb` must be > 0 when using the Verlet cutoff scheme.
+This is now checked by ``gmx grompp``.
+
+:issue:`5095`
+
+Fix ``gmx dump`` with options ``-sys`` and ``-orgir``
+"""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+These ``gmx dump`` options had no effect. This has now been fixed.
+
+:issue:`5124`
+
+Fixes that affect portability
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Fix build when GoogleTest is installed system-wide
+""""""""""""""""""""""""""""""""""""""""""""""""""
+
+In some cases (e.g., on FreeBSD), |Gromacs| build system can mix up
+different versions of GoogleTest leading to compilation errors.
+Now we always prefer the bundled version.
+
+:issue:`5046`
+
+Miscellaneous
+^^^^^^^^^^^^^
+
+Fix detection of rocFFT installed in non-standard locations
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Fix performance regression on PVC with oneAPI 2024.2
+""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+oneAPI 2024.2 enabled automatic GRF selection by the device compiler,
+causing up to 50% worse NBNxM kernel performance on Intel Data Center GPU Max
+(Ponte Vecchio) devices. We now force the use of small GRF mode on PVC
+to avoid that. Arc GPUs were not affected.
+
+:issue:`5105`
+
