@@ -52,6 +52,7 @@
 #include "gromacs/applied_forces/awh/read_params.h"
 #include "gromacs/mdlib/vcm.h"
 #include "gromacs/mdtypes/awh_params.h"
+#include "gromacs/mdtypes/lambda_dynamics_params.h"
 #include "gromacs/mdtypes/md_enums.h"
 #include "gromacs/mdtypes/multipletimestepping.h"
 #include "gromacs/mdtypes/pull_params.h"
@@ -1069,6 +1070,9 @@ void pr_inputrec(FILE* fp, int indent, const char* title, const t_inputrec* ir, 
         PR("userreal2", ir->userreal2);
         PR("userreal3", ir->userreal3);
         PR("userreal4", ir->userreal4);
+
+        /* For constant pH with lambda dynamics */
+        PS("lambda_dynamics", EBOOL(ir->lambda_dynamics));
 
         if (!bMDPformat)
         {

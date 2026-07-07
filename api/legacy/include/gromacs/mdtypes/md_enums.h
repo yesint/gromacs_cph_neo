@@ -890,4 +890,20 @@ enum class MdGraphEvenOrOddStep : int
     Count
 };
 
+/*! \brief
+ * Lambda dynamics temperature coupling (constant pH).
+ * yes is alias for v-rescale.
+ */
+enum
+{
+    eLambdaTcVRESCALE,
+    eLambdaTcLangevin,
+    eLambdaTcYes,
+    eLambdaTcNr
+};
+//! Strings corresponding to lambda dynamics temperature coupling types.
+extern const char* eLambdaTcoupl_names[eLambdaTcNr + 1];
+//! Macro for selecting lambda dynamics temperature coupling string.
+#define ELAMBDATCOUPLTYPE(e) enum_name(e, eLambdaTcNr, eLambdaTcoupl_names)
+
 #endif /* GMX_MDTYPES_MD_ENUMS_H */

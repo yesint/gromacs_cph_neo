@@ -88,6 +88,8 @@ enum
 
     enxAWH, /* AWH data */
 
+    enxCPHMD, /* Data for constant pH */
+
     enxNR /* Total number of extra blocks in the current code,
            * note that the enxio code can read files written by
            * future code which contain more blocks.

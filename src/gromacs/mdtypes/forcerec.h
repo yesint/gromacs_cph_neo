@@ -212,6 +212,11 @@ struct t_forcerec
     /* List of helper buffers for ForceOutputs, one for each time step with MTS */
     std::vector<ForceHelperBuffers> forceHelperBuffers;
 
+    /* Electrostatic potential buffer; we should compute the potential when not empty */
+    gmx::ArrayRef<real> electrostaticPotential;
+    /* This pointer is only here to avoid changing the do_force() call signature */
+    class ConstantPH* constantPH = nullptr;
+
     /* Data for PPPM/PME/Ewald */
     gmx_pme_t*   pmedata                = nullptr;
     LongRangeVdW ljpme_combination_rule = LongRangeVdW::Geom;

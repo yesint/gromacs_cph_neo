@@ -415,3 +415,7 @@ const char* enumValueToString(NbkernelVdwType enumValue)
     };
     return nbkernelVdwTypeNames[enumValue];
 }
+
+const char* eLambdaTcoupl_names[eLambdaTcNr + 1] = {
+    "V-rescale", "Langevin", "yes", nullptr
+}; /* yes is alias for v-rescale */

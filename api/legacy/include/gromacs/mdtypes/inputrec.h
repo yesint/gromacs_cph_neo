@@ -57,6 +57,7 @@ namespace gmx
 {
 class Awh;
 class AwhParams;
+class LambdaDynamicsSimulationParameters;
 template<typename T1, typename T2, T1 U>
 struct EnumerationArray;
 class KeyValueTreeObject;
@@ -605,6 +606,12 @@ struct t_inputrec // NOLINT (clang-analyzer-optin.performance.Padding)
     bool bRot = false;
     //! The data for enforced rotation potentials
     std::unique_ptr<t_rot> rot;
+
+    /* For constant pH with lambda dynamics */
+    //! Whether to perform lambda dynamics
+    bool lambda_dynamics = false;
+    //! lambda dynamics data.
+    std::unique_ptr<gmx::LambdaDynamicsSimulationParameters> lambdaDynamicsSimulationParameters;
 
     //! Whether to do ion/water position exchanges (CompEL)
     SwapType eSwapCoords = SwapType::Default;
