@@ -206,6 +206,16 @@ void nonbonded_verlet_t::atomdata_add_nbat_f_to_f(const AtomLocality locality, A
     wallcycle_stop(wcycle_, WallCycleCounter::NbXFBufOps);
 }
 
+void nonbonded_verlet_t::reduceElectrostaticPotential(const AtomLocality locality, ArrayRef<real> potential)
+{
+    nbat_->reduceElectrostaticPotential(locality, pairSearch_->gridSet(), potential);
+}
+
+void nonbonded_verlet_t::setAtomCharges(ArrayRef<const real> chargesA)
+{
+    nbat_->setCharges(pairSearch_->gridSet(), chargesA);
+}
+
 int nonbonded_verlet_t::getNumAtoms(const AtomLocality locality) const
 {
     int numAtoms = 0;

@@ -422,6 +422,12 @@ public:
      */
     void atomdata_add_nbat_f_to_f(AtomLocality locality, ArrayRef<RVec> force);
 
+    //! Constant-pH: reduce the kernel-accumulated electrostatic potential into \p potential (atom order).
+    void reduceElectrostaticPotential(AtomLocality locality, ArrayRef<real> potential);
+
+    //! Constant-pH: re-push per-atom charges into the nbat after lambda charges changed.
+    void setAtomCharges(ArrayRef<const real> chargesA);
+
     /*! \brief Get the number of atoms for a given locality
      *
      * \param [in] locality   Local or non-local

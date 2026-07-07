@@ -342,6 +342,13 @@ struct nbnxn_atomdata_t
      */
     void reduceForces(AtomLocality locality, const GridSet& gridSet, ArrayRef<RVec> totalForce);
 
+    //! Constant-pH: reduce the per-thread electrostatic potential (nbat order) into \p potential
+    //! (atom order), summing over thread output buffers.
+    void reduceElectrostaticPotential(AtomLocality locality, const GridSet& gridSet, ArrayRef<real> potential);
+
+    //! Constant-pH: re-push per-atom charges into the nbat (after lambda charges changed).
+    void setCharges(const GridSet& gridSet, ArrayRef<const real> chargesA);
+
     /*! \brief Clears the force buffer.
      *
      * Either the whole buffer is cleared or only the parts used

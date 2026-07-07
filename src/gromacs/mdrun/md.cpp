@@ -1287,6 +1287,15 @@ void gmx::LegacySimulator::do_md()
                          ddBalanceRegionHandler);
             }
 
+            /* Constant-pH: reduce the per-atom electrostatic potential that the
+             * non-bonded kernel accumulated (nbat order, per thread) into
+             * fr_->electrostaticPotential, which aliases constantph_->potential(). */
+            if (constantph_)
+            {
+                std::fill(fr_->electrostaticPotential.begin(), fr_->electrostaticPotential.end(), real(0));
+                fr_->nbv->reduceElectrostaticPotential(AtomLocality::Local, fr_->electrostaticPotential);
+            }
+
             /* Constant-pH: update the lambda coordinates using the electrostatic
              * potential accumulated by the non-bonded kernel during do_force. */
             if (constantph_)

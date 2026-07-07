@@ -38,6 +38,7 @@
 #include <memory>
 #include <vector>
 
+#include "gromacs/applied_forces/constant_ph/constant_ph.h"
 #include "gromacs/domdec/domdec.h"
 #include "gromacs/domdec/domdec_struct.h"
 #include "gromacs/domdec/localtopology.h"
@@ -161,6 +162,13 @@ void mdAlgorithmsSetupAtomData(const gmx_domdec_t*  dd,
                                mdatoms->nMassPerturbed != 0,
                                mdatoms->lambda,
                                mdatoms->cFREEZE);
+    }
+
+    // Constant-pH: (re)build each lambda group's local atom index mapping after
+    // (re)partitioning, so updateLambdas can read the per-atom potential buffer.
+    if (fr->constantPH)
+    {
+        fr->constantPH->updateAfterPartition(dd ? dd->ga2la.get() : nullptr, numHomeAtoms, fr->natoms_force);
     }
 }
 

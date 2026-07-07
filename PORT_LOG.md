@@ -52,5 +52,34 @@ Verify with `ldd build-cpu/bin/gmx | grep libgromacs` → must point into build-
   `potential[i]-=qi[i]*2*Vc_sub_self`; (6) kernel_ref_inner.h coulFuncValue/pcoul + `potential[i]+=q[j]*pcoul`;
   (7) sim_util.cpp per-step setAtomCharges re-push + reduce (!useGpu) → copy to fr->electrostaticPotential;
   (8) forcerec.cpp `bHaveQ |= lambda_dynamics`; (9) nbnxm.{cpp,h} reduce entry point.
-- **M1**: after WP5a, `GMX_CPH_DUMP_DVDL=1 GMX_NBNXN_PLAINC_1X1=1 mdrun -nsteps 0 -nb cpu` on port_sp.tpr;
-  compare cph_port_dvdl.dat to oracle_ref/M1_oracle_dvdl.txt (≤1e-4).
+- **WP5a wiring DONE** (commit pending): added `nbnxn_atomdata_t::reduceElectrostaticPotential`
+  (sum outputBuffers[*].potential over threads, map nbat→atom via gridSet.cells()) + `setCharges`;
+  `nonbonded_verlet_t::reduceElectrostaticPotential`/`setAtomCharges` wrappers; do_md reduces into
+  `fr_->electrostaticPotential` (aliases constantph_->potential()) after do_force, before updateLambdas.
+  Charge re-push NOT needed at step 0 (NS-step setAtomProperties already pushes the λ charges that
+  setLambdaCharges wrote into mdatoms->chargeA); needed for production multi-step (add setAtomCharges
+  each step + kernel_common.cpp potential-buffer clear).
+## ✅✅ M1 PASSES (2026-07-07) — go/no-go = GO
+Port `mdrun -nsteps 0 -nb cpu -ntomp 1` w/ `GMX_NBNXN_PLAINC_1X1=1` on the 46-λ cph system:
+**all 46 groups' dV/dλ (dvdl_pot) match the fork oracle, MAX|diff| = 5e-5** (single-precision rounding).
+The CPU-NB reference-kernel force path is CORRECT — the port grompps, runs, and computes cph identically
+to the 2021 fork. Reproduce: `bash <scratchpad>/run_m1.sh`.
+
+Two bugs found+fixed reaching M1 (both silent zeros):
+1. `GMX_COMPUTE_ELECTROSTATIC_POTENTIAL` (kernel_common.h) wasn't visible in the reference-kernel TU
+   → CALC_ELEC_POTENTIAL + the potential pointer compiled out with no error. Fix: `#include
+   "gromacs/nbnxm/kernel_common.h"` in kernel_ref_1x1.cpp + kernel_ref_4x4.cpp.
+2. `ConstantPH::updateAfterPartition` was never called → lambda groups' localAtomIndices empty →
+   updateLambdas summed nothing. Fix: call it at the end of `mdAlgorithmsSetupAtomData`
+   (domdec/mdsetup.cpp): `fr->constantPH->updateAfterPartition(dd ? dd->ga2la.get() : nullptr,
+   numHomeAtoms, fr->natoms_force)`.
+
+## Remaining (post-M1, per plan)
+- **WP5b** SIMD kernel (2026 rewrote it — no kernel_inner/outer.h; needs per-j potential scatter).
+  Until done, run cph with `GMX_NBNXN_PLAINC_1X1=1` (reference kernel) or add a hard-fatal when
+  lambda_dynamics + SIMD kernel selected.
+- **WP6** proper output: wire ConstantPH::writeToEnergyFrame → EnergyOutput/mdoutf enxCPHMD block
+  (replace the GMX_CPH_DUMP_DVDL debug dump); checkpoint λ x,v; register `gmx cphmd` tool.
+- **Production correctness**: per-step charge re-push (`nbv->setAtomCharges` each step, not just NS steps)
+  + `kernel_common.cpp` potential-buffer clear each step (M1 is single-step so neither bit yet).
+- **M2–M5**: multi-step dV/dλ across an NS step; titration/pKa vs fork; a two-domain window; regression test.

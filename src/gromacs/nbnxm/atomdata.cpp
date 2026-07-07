@@ -1625,6 +1625,40 @@ void nbnxn_atomdata_t::reduceForces(const AtomLocality locality, const GridSet& 
     }
 }
 
+void nbnxn_atomdata_t::reduceElectrostaticPotential(const AtomLocality locality,
+                                                    const GridSet&     gridSet,
+                                                    ArrayRef<real>     potential)
+{
+    const auto atomRange = getAtomRange(locality, gridSet);
+    if (atomRange.empty())
+    {
+        return;
+    }
+    GMX_ASSERT(ssize(potential) >= *atomRange.end(),
+               "The electrostatic potential buffer must be large enough");
+
+    const bool                orderMatches = gridSet.localAtomOrderMatchesNbnxmOrder();
+    gmx::ArrayRef<const int>  cell         = gridSet.cells();
+
+    /* The kernel accumulated the potential into each thread's output buffer in nbat
+     * order. Sum over threads and map to atom order. */
+    for (int a : atomRange)
+    {
+        const int nbatIndex = orderMatches ? a : cell[a];
+        real      sum       = 0;
+        for (const nbnxn_atomdata_output_t& out : outputBuffers_)
+        {
+            sum += out.potential[nbatIndex];
+        }
+        potential[a] += sum;
+    }
+}
+
+void nbnxn_atomdata_t::setCharges(const GridSet& gridSet, ArrayRef<const real> chargesA)
+{
+    nbnxn_atomdata_set_charges(this, gridSet, chargesA, {}, false);
+}
+
 void nbnxn_atomdata_add_nbat_fshift_to_fshift(const nbnxn_atomdata_t& nbat, ArrayRef<RVec> fshift)
 {
     ArrayRef<const nbnxn_atomdata_output_t> outputBuffers = nbat.outputBuffers();
