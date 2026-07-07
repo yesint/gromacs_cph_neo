@@ -60,6 +60,7 @@
 #include <variant>
 #include <vector>
 
+#include "gromacs/applied_forces/constant_ph/constant_ph.h"
 #include "gromacs/commandline/filenm.h"
 #include "gromacs/domdec/builder.h"
 #include "gromacs/domdec/domdec.h"
@@ -1576,6 +1577,15 @@ int Mdrunner::mdrunner()
 
     t_commrec* cr = commRec.get();
 
+    // Constant-pH (lambda dynamics): create the ConstantPH object once the commrec
+    // exists. Separate PME ranks are not (yet) supported; single-rank / PP+PME on the
+    // same rank (the CPU-NB cph use case) is fine.
+    std::unique_ptr<ConstantPH> constantPH;
+    if (inputrec->lambda_dynamics)
+    {
+        constantPH = std::make_unique<ConstantPH>(*inputrec, mtop.natoms, cr, mdlog);
+    }
+
     // Ensure that all atoms within the same update group are in the
     // same periodic image. Otherwise, a simulation that did not use
     // update groups (e.g. a single-rank simulation) cannot always be
@@ -2018,6 +2028,14 @@ int Mdrunner::mdrunner()
             ewaldcoeff_q  = fr->ic->coulomb.ewaldCoeff;
             ewaldcoeff_lj = fr->ic->vdw.ewaldCoeff;
         }
+
+        if (inputrec->lambda_dynamics)
+        {
+            // Connect the ConstantPH per-atom potential buffer to the force record so
+            // the (CPU) non-bonded kernel accumulates the electrostatic potential into it.
+            fr->electrostaticPotential = constantPH->potential();
+            fr->constantPH             = constantPH.get();
+        }
     }
     else
     {
@@ -2370,6 +2388,7 @@ int Mdrunner::mdrunner()
             simulatorBuilder.add(IonSwapping(swap.get()));
             simulatorBuilder.add(TopologyData(mtop, &localTopology, mdAtoms.get()));
             simulatorBuilder.add(BoxDeformationHandle(deform.get()));
+            simulatorBuilder.add(ConstantpHHandle(constantPH.get()));
             simulatorBuilder.add(std::move(modularSimulatorCheckpointData));
 
             // build and run simulator object based on user-input

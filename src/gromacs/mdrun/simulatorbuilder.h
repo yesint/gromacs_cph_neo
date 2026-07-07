@@ -64,6 +64,7 @@ struct t_forcerec;
 struct t_inputrec;
 struct t_nrnb;
 class t_state;
+class ConstantPH;
 
 namespace gmx
 {
@@ -334,6 +335,17 @@ public:
     BoxDeformation* deform;
 };
 
+/*! \brief Handle to constant-pH (lambda dynamics) information. */
+class ConstantpHHandle
+{
+public:
+    //! Build handle to constant pH data.
+    ConstantpHHandle(ConstantPH* constantph) : constantph(constantph) {}
+
+    //! Internal storage for handle.
+    ConstantPH* constantph;
+};
+
 /*! \libinternal
  * \brief Class preparing the creation of Simulator objects
  *
@@ -418,6 +430,11 @@ public:
         boxDeformation_ = std::make_unique<BoxDeformationHandle>(boxDeformation);
     }
 
+    void add(ConstantpHHandle&& constantph)
+    {
+        constantph_ = std::make_unique<ConstantpHHandle>(constantph);
+    }
+
     /*!
      * \brief Pass the read checkpoint data for modular simulator
      *
@@ -465,6 +482,7 @@ private:
     std::unique_ptr<IonSwapping>               ionSwapping_;
     std::unique_ptr<TopologyData>              topologyData_;
     std::unique_ptr<BoxDeformationHandle>      boxDeformation_;
+    std::unique_ptr<ConstantpHHandle>          constantph_;
     //! Contains checkpointing data for the modular simulator
     std::unique_ptr<ReadCheckpointDataHolder> modularSimulatorCheckpointData_;
     /*! \} */

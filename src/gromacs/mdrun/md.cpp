@@ -56,6 +56,7 @@
 #include <vector>
 
 #include "gromacs/applied_forces/awh/awh.h"
+#include "gromacs/applied_forces/constant_ph/constant_ph.h"
 #include "gromacs/applied_forces/awh/read_params.h"
 #include "gromacs/commandline/filenm.h"
 #include "gromacs/compat/pointers.h"
@@ -1243,6 +1244,13 @@ void gmx::LegacySimulator::do_md()
                     awh->updateHistory(stateGlobal_->awhHistory.get());
                 }
 
+                /* Constant-pH: set the lambda-interpolated charges before the force
+                 * calculation so the non-bonded kernel sees the current lambda state. */
+                if (constantph_)
+                {
+                    constantph_->setLambdaCharges(mdAtoms_->mdatoms()->chargeA);
+                }
+
                 /* The coordinates (x) are shifted (to get whole molecules)
                  * in do_force.
                  * This is parallellized as well, and does communication too.
@@ -1277,6 +1285,26 @@ void gmx::LegacySimulator::do_md()
                          ed ? ed->getLegacyED() : nullptr,
                          fr_->longRangeNonbondeds.get(),
                          ddBalanceRegionHandler);
+            }
+
+            /* Constant-pH: update the lambda coordinates using the electrostatic
+             * potential accumulated by the non-bonded kernel during do_force. */
+            if (constantph_)
+            {
+                const auto cphEnergies = constantph_->updateLambdas(step);
+                enerd_->term[InteractionFunction::PotentialEnergy] += cphEnergies.lambdaPotentialSum;
+                enerd_->term[InteractionFunction::KineticEnergy] += cphEnergies.EkinTotal;
+                // (fork also folds deltaEkin into state->lambda_therm_integral, absent in 2026)
+                if (std::getenv("GMX_CPH_DUMP_DVDL"))
+                {
+                    FILE* fpd = std::fopen("cph_port_dvdl.dat", "w");
+                    int   gi  = 0;
+                    for (const auto& lc : constantph_->lambdaCoordinates())
+                    {
+                        std::fprintf(fpd, "%3d  %12.5f\n", ++gi, lc.dvdl_pot);
+                    }
+                    std::fclose(fpd);
+                }
             }
 
             // VV integrators do not need the following velocity half step

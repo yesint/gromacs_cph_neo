@@ -63,6 +63,7 @@ struct t_filenm;
 struct t_inputrec;
 struct t_nrnb;
 class t_state;
+class ConstantPH;
 
 namespace gmx
 {
@@ -146,7 +147,8 @@ public:
                         gmx_membed_t*                       membed,
                         gmx_walltime_accounting*            walltime_accounting,
                         std::unique_ptr<StopHandlerBuilder> stopHandlerBuilder,
-                        bool                                doRerun) :
+                        bool                                doRerun,
+                        ConstantPH*                         constantph) :
         fpLog_(fplog),
         cr_(cr),
         ms_(ms),
@@ -183,7 +185,8 @@ public:
         membed_(membed),
         wallTimeAccounting_(walltime_accounting),
         stopHandlerBuilder_(std::move(stopHandlerBuilder)),
-        doRerun_(doRerun)
+        doRerun_(doRerun),
+        constantph_(constantph)
     {
     }
 
@@ -261,6 +264,8 @@ public:
     std::unique_ptr<StopHandlerBuilder> stopHandlerBuilder_;
     //! Whether we're doing a rerun.
     bool doRerun_;
+    //! Constant-pH (lambda dynamics) data; nullptr when not doing cpHMD.
+    ConstantPH* constantph_;
 };
 
 } // namespace gmx

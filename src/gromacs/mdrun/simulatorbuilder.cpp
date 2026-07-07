@@ -130,6 +130,10 @@ std::unique_ptr<ISimulator> SimulatorBuilder::build(bool useModularSimulator)
     {
         throw APIError("You must add a TopologyData before calling build().");
     }
+    if (!constantph_)
+    {
+        throw APIError("You must add a ConstantpHHandle before calling build().");
+    }
 
     if (useModularSimulator)
     {
@@ -171,7 +175,8 @@ std::unique_ptr<ISimulator> SimulatorBuilder::build(bool useModularSimulator)
                                                       membedHolder_->membed(),
                                                       profiling_->wallTimeAccounting_,
                                                       std::move(stopHandlerBuilder_),
-                                                      simulatorConfig_->mdrunOptions_.rerun),
+                                                      simulatorConfig_->mdrunOptions_.rerun,
+                                                      constantph_->constantph),
                 std::move(modularSimulatorCheckpointData_)));
     }
     // NOLINTNEXTLINE(modernize-make-unique): make_unique does not work with private constructor
@@ -211,7 +216,8 @@ std::unique_ptr<ISimulator> SimulatorBuilder::build(bool useModularSimulator)
                                                                 membedHolder_->membed(),
                                                                 profiling_->wallTimeAccounting_,
                                                                 std::move(stopHandlerBuilder_),
-                                                                simulatorConfig_->mdrunOptions_.rerun));
+                                                                simulatorConfig_->mdrunOptions_.rerun,
+                                                                constantph_->constantph));
 }
 
 void SimulatorBuilder::add(MembedHolder&& membedHolder)
