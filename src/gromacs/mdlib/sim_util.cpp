@@ -1785,6 +1785,16 @@ void do_force(FILE*                         fplog,
             }
             nbv->convertCoordinates(AtomLocality::Local, x.unpaddedArrayRef());
         }
+
+        // Constant-pH: the lambda-dependent charges in mdatoms->chargeA are updated every step
+        // (setLambdaCharges), but they are only pushed into the nbnxm atom data on neighbor-search
+        // steps (setAtomProperties in doPairSearch). Re-push them here on non-search steps so the
+        // non-bonded kernel — and hence the per-atom electrostatic potential that drives
+        // dV/dlambda — uses the current charges instead of charges up to nstlist steps stale.
+        if (fr->constantPH != nullptr)
+        {
+            nbv->setAtomCharges(mdatoms->chargeA);
+        }
     }
 
     if (simulationWork.useGpuNonbonded && (stepWork.computeNonbondedForces || domainWork.haveGpuBondedWork))
