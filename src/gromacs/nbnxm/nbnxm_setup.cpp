@@ -267,16 +267,16 @@ static NbnxmKernelSetup pickNbnxnKernelCpu(const t_inputrec&    inputrec,
         return NbnxmKernelSetup{ NbnxmKernelType::Cpu1x1_PlainC, EwaldExclusionType::Table };
     }
     // Constant-pH (lambda dynamics) needs the per-atom electrostatic potential. Both the
-    // plain-C reference kernels and (since WP5b) the SIMD kernels accumulate it. The SIMD
-    // path is opt-in via GMX_CPH_SIMD while it beds in; the validated default stays the
-    // plain-C 4x4 reference kernel.
-    if (inputrec.lambda_dynamics && std::getenv("GMX_CPH_SIMD") == nullptr)
+    // plain-C reference kernels and (since WP5b) the SIMD kernels accumulate it, so cph
+    // uses the fast SIMD kernels by default. Set GMX_CPH_NO_SIMD to fall back to the
+    // plain-C 4x4 reference kernel (slower; kept as an escape hatch for debugging).
+    if (inputrec.lambda_dynamics && std::getenv("GMX_CPH_NO_SIMD") != nullptr)
     {
         GMX_LOG(mdlog.info)
                 .asParagraph()
                 .appendText(
-                        "Constant pH: using the plain-C 4x4 non-bonded kernel (set GMX_CPH_SIMD to "
-                        "use the faster SIMD kernels with per-atom electrostatic potential).");
+                        "Constant pH: using the plain-C 4x4 non-bonded kernel "
+                        "(GMX_CPH_NO_SIMD set); unset it to use the faster SIMD kernels.");
         return NbnxmKernelSetup{ NbnxmKernelType::Cpu4x4_PlainC, EwaldExclusionType::Table };
     }
     if (GMX_SIMD && useSimd && nbnxmSimdSupported(mdlog, inputrec))

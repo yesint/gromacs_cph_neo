@@ -101,15 +101,16 @@ edr output + gmx cphmd ✓, chunked -cpi restarts ✓. Run: `LD_LIBRARY_PATH=...
 
 ## ✅✅ WP5b SIMD kernel — DONE + VALIDATED (2026-07-07)
 The SIMD non-bonded kernel now accumulates the per-atom electrostatic potential, so cph runs
-on the fast SIMD kernels instead of the plain-C reference. **Opt-in via `GMX_CPH_SIMD=1`**; the
-validated default stays plain-C 4x4 (risk-free). Files touched (all under `src/gromacs/nbnxm/`):
+on the fast SIMD kernels instead of the plain-C reference. **SIMD is the default for cph**; set
+`GMX_CPH_NO_SIMD=1` to fall back to the plain-C 4x4 reference kernel (escape hatch for debugging).
+Files touched (all under `src/gromacs/nbnxm/`):
 - **atomdata.{h,cpp}**: added `computeElectrostaticPotential_` flag (+ getter/setter). This is the
   runtime signal that gates the SIMD potential work — set = `inputrec.lambda_dynamics` in
   `nbnxm_setup.cpp` right after nbat construction. (The potential *buffer* resize stays keyed on the
   compile macro so the reference kernel is untouched; the SIMD kernel gates on the flag, so non-cph
   SIMD runs skip the work.)
-- **nbnxm_setup.cpp** `pickNbnxnKernelCpu`: cph forces plain-C 4x4 **only when `GMX_CPH_SIMD` is unset**;
-  with it set, cph uses the normal SIMD selection.
+- **nbnxm_setup.cpp** `pickNbnxnKernelCpu`: cph uses the normal SIMD selection by default; it forces
+  plain-C 4x4 **only when `GMX_CPH_NO_SIMD` is set**.
 - **simd_kernel.h**: unpack `potential` ptr + `computePotential` bool; init `ewaldShift` also when the
   potential macro is on (needed on non-energy steps); zero-init a `potentialIV[nR]` accumulator by the
   i-forces; RF/Ewald potential **self-term** (runtime-guarded, mirrors the energy self); after the
@@ -136,8 +137,9 @@ Both paths implemented and validated.
 - **Speed** (8 threads, 46k beads, `ck2.tpr`): NB Force **31.97 ms/step (plain-C-4x4) → 4.13 ms/step
   (SIMD-4xN) ≈ 7.7× faster**; total wall ~3.2× (short run; higher once startup amortizes).
 
-**How to run cph on SIMD:** `GMX_CPH_SIMD=1 LD_LIBRARY_PATH=.../build-cpu/lib gmx mdrun ...` (auto 4xN;
-force layout with `GMX_NBNXN_SIMD_4XN` / `GMX_NBNXN_SIMD_2XNN`). Without `GMX_CPH_SIMD`, still plain-C 4x4.
+**How to run cph:** just `LD_LIBRARY_PATH=.../build-cpu/lib gmx mdrun ...` — SIMD (auto 4xN) is the
+default (force layout with `GMX_NBNXN_SIMD_4XN` / `GMX_NBNXN_SIMD_2XNN`). `GMX_CPH_NO_SIMD=1` reverts
+to plain-C 4x4.
 
 ## THE PORT IS FULLY COMPLETE — remaining items are cosmetic/optional
 - Cosmetic: edr block name shows 'id' not 'Constant pH data' in gmx dump (cphmd matches by numeric id).
