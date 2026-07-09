@@ -99,10 +99,14 @@ Effort is rough dev-days for the CPU-port author now on GPU. **CUDA first** (clu
 local GPU, so all GPU build/test is on aurum2.
 
 ### Layer 0 — general-purpose CPU foundation (no GPU; makes the port correct at scale)
-- **L0.1 PME per-atom potential, CPU (2–3d).** Port `gather_potential_bsplines` + wire it into the
-  CPU PME gather so `fr->electrostaticPotential` gets the reciprocal term; assemble NB+PME as the fork
-  does. Gate all of it on `lambda_dynamics`. **Gate M0a:** dV/dλ on a small **PME** cph system, CPU
-  port vs fork ≤ 1e-4 (new oracle — the current M1 oracle is RF-only).
+- **L0.1 PME per-atom potential, CPU — ✅ DONE (commit 1b90be2), M0a PASS.** Ported
+  `gatherPmePotential` into the CPU PME gather so `fr->electrostaticPotential` gets the reciprocal
+  term; NB+PME assembled by clearing the buffer before do_force and letting both `+=`. Key subtlety
+  found: titratable atoms neutral at the current λ (charge 0, non-zero charge-difference) were skipped
+  by `make_bsplines` → forced all-atom splines when gathering (`bDoSplines |= !potentials.empty()`).
+  **M0a:** all 46 λ groups' dV/dλ match the 2021 fork to the single-precision floor (max rel 1.1e-5;
+  RF regression unchanged at 5e-5). Repro: `full_size/cph/m0a_repro.sh`. Single PME rank only (PME
+  decomposition asserts out — deferred to the multi-rank work). See PORT_LOG.md for full detail.
 - **L0.2 Multi-rank DD, CPU (2–3d).** `ConstantPH` is built with `nullptr` commrec
   (`runner.cpp:1264`) → single-rank only. Pass the real `MpiComm`; `updateLambdas` already has the
   `commMyGroup.sumReduce(groupPotential)` path (`constant_ph.cpp:1504`) but it is dead without a

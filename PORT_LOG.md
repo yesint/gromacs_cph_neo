@@ -146,3 +146,36 @@ to plain-C 4x4.
 - Multi-rank DD cph (real commrec) — not needed for the single-rank campaign.
 - M3–M5 (titration/pKa vs fork; full two-domain window; refdata regression test) — science validation,
   not port work.
+
+## GENERAL-PURPOSE GPU work — see GPU_LAMBDA_UPDATE_PLAN.md (branch gpu-lambda-update)
+
+### ✅ L0.1 DONE + M0a PASS (2026-07-09, commit 1b90be2) — CPU PME reciprocal potential
+The CPU port previously filled `fr->electrostaticPotential` from the **NB real-space kernel only**
+(correct for reaction-field Martini, WRONG for any PME system — the reciprocal dV/dlambda term was
+missing). Ported the fork's PME mesh potential into the 2026 CPU PME path:
+- `pme_gather.{h,cpp}`: `gatherPmePotential()` (theta·grid contraction, mirrors `gather_f_bsplines`).
+- `pme.{h,cpp}`: `gmx_pme_do()` gets a `potentials` out-arg, filled after the Coulomb force gather
+  (single PME rank asserted). **KEY FIX:** `bDoSplines |= !potentials.empty()` forces all-atom
+  b-splines — else `make_bsplines` skips atoms with charge 0, and a titratable atom that is *neutral
+  at the current lambda* (charge 0 but non-zero charge-difference) gets no valid spline → its
+  reciprocal potential is garbage. This was exactly the HIS + BUF bug (see below).
+- `force.{h,cpp}`, `sim_util.cpp`: thread `fr->electrostaticPotential` into `gmx_pme_do` when cph on.
+- `md.cpp`: clear the potential buffer **before** do_force (PME adds during, NB reduce adds after —
+  both `+=`); the old post-do_force `std::fill` would have wiped the PME part.
+- `pme_only.cpp`: passes empty potentials (separate-PME-rank cph unsupported).
+
+**M0a protocol (new PME oracle; the locked M1 oracle is RF-only):** same 46-λ cph system as M1 but
+`coulombtype = PME` (`sp_pme.mdp`), single point (`nsteps 0`), reference kernel
+(`GMX_CPH_NO_SIMD=1 GMX_NBNXN_PLAINC_1X1=1 -nb cpu -ntmpi 1 -ntomp 1`). grompp+run BOTH the 2021 fork
+and the port; extract per-group dV/dλ (port: `GMX_CPH_DUMP_DVDL=1`→`cph_port_dvdl.dat`; fork:
+`gmx cphmd -dvdl -nocoordinate -numplot 1`→`<base>-dvdl-N.xvg`). Repro dir + script:
+`cph/m0a_repro.sh` (rebuilds it in a scratch dir from `cph/` inputs).
+**Result: all 46 groups match to the single-precision floor** — max **relative** 1.1e-5 (identical
+144×144×96 grid), max abs 1.9e-3 on the buffer group (magnitude 4231 → rel 4.5e-7). The RF regression
+is unchanged (max abs 5e-5); the PME floor is ~5× the RF floor = the extra reciprocal-FFT summation in
+single precision, not a code error. **Before the all-atom-spline fix the 4 HIS groups + buffer were
+off by up to 100%** (they are neutral at their initial λ). Multi-threaded PME gather (`-ntomp 4`)
+matches single-thread (no race; threaded spline path validated).
+
+**Scope note:** single PME rank only. PME domain decomposition (`pme->nnodes>1`) hard-asserts — that
+(and separate PME ranks) is deferred with the rest of the multi-rank work (L0.2 / §4 of the plan).
