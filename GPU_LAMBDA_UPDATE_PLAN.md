@@ -107,11 +107,18 @@ local GPU, so all GPU build/test is on aurum2.
   **M0a:** all 46 λ groups' dV/dλ match the 2021 fork to the single-precision floor (max rel 1.1e-5;
   RF regression unchanged at 5e-5). Repro: `full_size/cph/m0a_repro.sh`. Single PME rank only (PME
   decomposition asserts out — deferred to the multi-rank work). See PORT_LOG.md for full detail.
-- **L0.2 Multi-rank DD, CPU (2–3d).** `ConstantPH` is built with `nullptr` commrec
-  (`runner.cpp:1264`) → single-rank only. Pass the real `MpiComm`; `updateLambdas` already has the
-  `commMyGroup.sumReduce(groupPotential)` path (`constant_ph.cpp:1504`) but it is dead without a
-  commrec. Verify `updateAfterPartition` rebuilds `localAtomIndices` correctly each repartition.
-  **Gate M0b:** a 2–4 rank DD cph PME run reproduces the single-rank λ trajectory.
+- **L0.2 Multi-rank DD, CPU — 🚧 IN PROGRESS (two bugs; part 1 done).** Turned out to be *two*
+  independent DD bugs (see PORT_LOG.md):
+  - **✅ part 1 (commit 34dc38b):** the cross-domain group-potential all-reduce + λ-broadcast were dead
+    because `ConstantPH` had a `nullptr` commrec. Added `setCommrec()`, injected in runner. No-op at
+    single rank. `updateAfterPartition`'s ga2la mapping was already correct.
+  - **🚧 part 2 (open):** the per-atom potential on *halo* atoms is not communicated back to home ranks
+    (the port reduces only `Local` and has no potential halo move; the fork rides `dd_move_f` by storing
+    φ in the 4th force component). Preferred fix: reduce over `All` + an explicit scalar DD halo move,
+    keeping the separate potential buffer (aligns with the GPU design). Needs a boundary-straddling
+    multi-domain test.
+  **Gate M0b:** a 2–4 rank DD cph run reproduces the single-rank λ trajectory (blocked on part 2). Note:
+  DD+PME additionally needs the deferred PME-decomposition/separate-PME-rank potential path (§4).
 
 Layer 0 alone upgrades the port from "RF single-rank" to "general CPU cph." It is a prerequisite for
 *any* large-system use and is independent of the GPU decision.

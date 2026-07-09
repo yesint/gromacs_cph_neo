@@ -179,3 +179,34 @@ matches single-thread (no race; threaded spline path validated).
 
 **Scope note:** single PME rank only. PME domain decomposition (`pme->nnodes>1`) hard-asserts — that
 (and separate PME ranks) is deferred with the rest of the multi-rank work (L0.2 / §4 of the plan).
+
+### 🚧 L0.2 IN PROGRESS — multi-rank DD cph (two distinct bugs; part 1 done, part 2 open)
+Diagnosed that DD cph is broken in **two** independent ways (RF, 4 thread-MPI ranks vs 1 rank, single
+point): before any fix, 9/46 groups wrong (several read 0). The two causes:
+
+1. **✅ FIXED (commit 34dc38b) — cross-domain group-potential reduce.** A λ group's *atoms* can live on
+   different ranks; each rank must sum its home atoms' Σφ·Δq and all-reduce. `ConstantPH` was built with
+   a `nullptr` commrec (`runner.cpp` — early construction so a checkpoint can populate λ), so the
+   `commMyGroup.sumReduce` in `updateLambdas` and the λ-broadcast in `updateAfterPartition` were dead.
+   Added `ConstantPH::setCommrec()`, called in runner once `cr` exists. `sumReduce` is `MPI_Allreduce`
+   (thread-MPI) so every rank integrates λ identically. No-op at single rank (size()>1 guards). The DD
+   atom→local mapping in `updateAfterPartition` (ga2la, home atoms only, no double count) was already
+   correct.
+
+2. **🚧 OPEN — per-atom potential halo back-communication.** The NB kernel adds each pair's potential to
+   BOTH endpoints (`potential[i]+=facel·q_j·coul; potential[j]+=q_i·coul`). Under DD, when a home atom is
+   the *halo* partner of a pair computed on another rank, that contribution lands on the halo copy and is
+   never sent home. The port reduces only `AtomLocality::Local` and has **no potential halo move**, so
+   home atoms miss the cross-boundary contributions. **The fork avoids this entirely by storing the
+   potential as the 4th component of the force buffer** (`fnb[i+3]`, atomdata.cpp), so the existing
+   `atomdata_add_nbat_f_to_f(AtomLocality::All, …)` + `dd_move_f` halo reduction carry it for free.
+   **Two fix options for the port** (which keeps potential in a *separate* buffer — better for the GPU
+   plan's `DeviceBuffer<float> potential`):
+   - (A) adopt the fork's 4th-force-component storage — proven, but a kernel refactor undoing part of
+     WP5a/WP5b and awkward for the GPU design;
+   - (B) keep the separate buffer, reduce over `AtomLocality::All`, then add an explicit scalar DD halo
+     move (analogue of `dd_move_f`) to sum halo→home before the group reduce. **Preferred** (aligns with
+     the separate-buffer / GPU design). Needs a proper multi-domain test where λ-group atoms straddle a
+     boundary.
+   With part 1 only, RF 4-rank vs 1-rank dV/dλ still differs ~22% on boundary-straddling groups → **DD is
+   NOT yet correct.** Single-rank (M0a, and the production campaign) is unaffected and fully validated.
