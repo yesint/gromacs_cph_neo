@@ -113,10 +113,11 @@ local GPU, so all GPU build/test is on aurum2.
     because `ConstantPH` had a `nullptr` commrec. Added `setCommrec()`, injected in runner. No-op at
     single rank. `updateAfterPartition`'s ga2la mapping was already correct.
   - **🚧 part 2 (open):** the per-atom potential on *halo* atoms is not communicated back to home ranks
-    (the port reduces only `Local` and has no potential halo move; the fork rides `dd_move_f` by storing
-    φ in the 4th force component). Preferred fix: reduce over `All` + an explicit scalar DD halo move,
-    keeping the separate potential buffer (aligns with the GPU design). Needs a boundary-straddling
-    multi-domain test.
+    (the port reduces only `Local` and has no potential halo move). **The 2021 fork does NOT solve this
+    either** (grep-verified: same separate-buffer design, reduces over `All`, but zero DD comm of the
+    potential; `dd_move_f` moves only forces) — so this is NEW work, not a port. Preferred fix: reduce
+    over `All` + an explicit scalar DD halo move, keeping the separate potential buffer (aligns with the
+    GPU design). Needs a boundary-straddling multi-domain test.
   **Gate M0b:** a 2–4 rank DD cph run reproduces the single-rank λ trajectory (blocked on part 2). Note:
   DD+PME additionally needs the deferred PME-decomposition/separate-PME-rank potential path (§4).
 

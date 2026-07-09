@@ -197,16 +197,24 @@ point): before any fix, 9/46 groups wrong (several read 0). The two causes:
    BOTH endpoints (`potential[i]+=facel·q_j·coul; potential[j]+=q_i·coul`). Under DD, when a home atom is
    the *halo* partner of a pair computed on another rank, that contribution lands on the halo copy and is
    never sent home. The port reduces only `AtomLocality::Local` and has **no potential halo move**, so
-   home atoms miss the cross-boundary contributions. **The fork avoids this entirely by storing the
-   potential as the 4th component of the force buffer** (`fnb[i+3]`, atomdata.cpp), so the existing
-   `atomdata_add_nbat_f_to_f(AtomLocality::All, …)` + `dd_move_f` halo reduction carry it for free.
-   **Two fix options for the port** (which keeps potential in a *separate* buffer — better for the GPU
-   plan's `DeviceBuffer<float> potential`):
-   - (A) adopt the fork's 4th-force-component storage — proven, but a kernel refactor undoing part of
-     WP5a/WP5b and awkward for the GPU design;
-   - (B) keep the separate buffer, reduce over `AtomLocality::All`, then add an explicit scalar DD halo
-     move (analogue of `dd_move_f`) to sum halo→home before the group reduce. **Preferred** (aligns with
-     the separate-buffer / GPU design). Needs a proper multi-domain test where λ-group atoms straddle a
-     boundary.
+   home atoms miss the cross-boundary contributions.
+   **CORRECTION (grep-verified 2026-07-09): the 2021 FORK DOES NOT SOLVE THIS EITHER.** Its cph uses the
+   SAME design as the port — a separate `nbnxn_atomdata_output_t::potential` buffer (atomdata.h:138), the
+   kernel writes `potential[...]` (kernel_ref_inner.h), and it is reduced nbat→atom into
+   `fr->electrostaticPotential` via `addElectrostaticPotential`. The fork reduces over `AtomLocality::All`
+   (vs the port's `Local`), but there is **zero DD/MPI communication of the per-atom potential anywhere in
+   the fork** (grep of all `src/gromacs` for potential + send/recv/move/bcast/allreduce/dd_ is empty).
+   `dd_move_f` moves only the rvec force (3-wide) — it does not carry the potential. (The `fnb[i+3]` read
+   in `add_nbat_f_to_f_part` reads the nbat force buffer's 4th slot, which the kernel never writes for
+   cph, so it adds 0 — a dead path, NOT a halo mechanism.) So reducing over `All` is a no-op for
+   correctness without a subsequent halo move: the halo indices it fills are never read and never sent
+   home. **The fork's only cph MPI ops are in constant_ph.cpp: the group-potential `sumReduce` and the
+   λ-state `gmx_bcast` — i.e. exactly L0.2 part 1.** The fork is therefore correct only single-rank per
+   window (its actual usage: job array, one window per mdrun, no `-multidir`, no DD).
+   **⇒ L0.2 part 2 is genuinely NEW work, not present upstream.** Preferred fix for the port (keeps the
+   separate buffer, aligns with the GPU plan's `DeviceBuffer<float> potential`): reduce over
+   `AtomLocality::All`, then add an explicit **scalar DD halo move** (reverse of the coordinate halo
+   exchange / analogue of `dd_move_f`) to sum halo→home before the group reduce. Needs a multi-domain
+   test where λ-group atoms straddle a boundary.
    With part 1 only, RF 4-rank vs 1-rank dV/dλ still differs ~22% on boundary-straddling groups → **DD is
    NOT yet correct.** Single-rank (M0a, and the production campaign) is unaffected and fully validated.
