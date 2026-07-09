@@ -107,19 +107,17 @@ local GPU, so all GPU build/test is on aurum2.
   **M0a:** all 46 λ groups' dV/dλ match the 2021 fork to the single-precision floor (max rel 1.1e-5;
   RF regression unchanged at 5e-5). Repro: `full_size/cph/m0a_repro.sh`. Single PME rank only (PME
   decomposition asserts out — deferred to the multi-rank work). See PORT_LOG.md for full detail.
-- **L0.2 Multi-rank DD, CPU — 🚧 IN PROGRESS (two bugs; part 1 done).** Turned out to be *two*
-  independent DD bugs (see PORT_LOG.md):
-  - **✅ part 1 (commit 34dc38b):** the cross-domain group-potential all-reduce + λ-broadcast were dead
-    because `ConstantPH` had a `nullptr` commrec. Added `setCommrec()`, injected in runner. No-op at
-    single rank. `updateAfterPartition`'s ga2la mapping was already correct.
-  - **🚧 part 2 (open):** the per-atom potential on *halo* atoms is not communicated back to home ranks
-    (the port reduces only `Local` and has no potential halo move). **The 2021 fork does NOT solve this
-    either** (grep-verified: same separate-buffer design, reduces over `All`, but zero DD comm of the
-    potential; `dd_move_f` moves only forces) — so this is NEW work, not a port. Preferred fix: reduce
-    over `All` + an explicit scalar DD halo move, keeping the separate potential buffer (aligns with the
-    GPU design). Needs a boundary-straddling multi-domain test.
-  **Gate M0b:** a 2–4 rank DD cph run reproduces the single-rank λ trajectory (blocked on part 2). Note:
-  DD+PME additionally needs the deferred PME-decomposition/separate-PME-rank potential path (§4).
+- **L0.2 Multi-rank DD, CPU — ✅ DONE (commits 34dc38b + 3229b8f), M0b PASS.** Three independent DD bugs,
+  all fixed (see PORT_LOG.md): (1) dead group-potential all-reduce / λ-broadcast (`ConstantPH` had a
+  `nullptr` commrec → `setCommrec()` injected in runner); (2) group **double-count** —
+  `updateAfterPartition` used `ga2la->find()` which returns halo copies too, so an atom home on one rank
+  and halo on another was counted on both → use `ga2la->findHome()`; (3) **per-atom potential halo
+  exchange** — mirror the force reduction `reduceForces(NonLocal) → dd_move_f → reduceForces(Local)` (the
+  potential rides `dd_move_f` embedded in an rvec x-component; order is load-bearing — home slots are
+  forwarding scratch during the move). Bugs 2+3 are new work (the 2021 fork does neither; correct only
+  single-rank). **M0b:** RF DD 1-vs-{2,4,8} ranks and 4×2 threads match to rel 3e-6; 30-step run with
+  repartitioning matches single-rank; single-rank M0a unregressed. Repro: `full_size/cph/m0b_repro.sh`.
+  **DD+PME still deferred** (reciprocal potential needs PME-decomposition/separate-PME-rank comm — §4).
 
 Layer 0 alone upgrades the port from "RF single-rank" to "general CPU cph." It is a prerequisite for
 *any* large-system use and is independent of the GPU decision.

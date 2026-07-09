@@ -180,41 +180,45 @@ matches single-thread (no race; threaded spline path validated).
 **Scope note:** single PME rank only. PME domain decomposition (`pme->nnodes>1`) hard-asserts — that
 (and separate PME ranks) is deferred with the rest of the multi-rank work (L0.2 / §4 of the plan).
 
-### 🚧 L0.2 IN PROGRESS — multi-rank DD cph (two distinct bugs; part 1 done, part 2 open)
-Diagnosed that DD cph is broken in **two** independent ways (RF, 4 thread-MPI ranks vs 1 rank, single
-point): before any fix, 9/46 groups wrong (several read 0). The two causes:
+### ✅ L0.2 DONE + M0b PASS (2026-07-09, commits 34dc38b + 3229b8f) — multi-rank DD cph
+DD cph was broken in **three** independent ways (RF, 4 thread-MPI ranks vs 1 rank, single point);
+all fixed. RF DD now reproduces single-rank dV/dλ to the single-precision floor for 2/4/8 ranks and
+4 ranks × 2 threads (max rel 3e-6), a 30-step run with `nstlist=10` repartitioning matches
+single-rank over the whole trajectory, and single-rank M0a is unregressed. Repro:
+`full_size/cph/m0b_repro.sh`. **DD+PME is still unsupported** (the reciprocal potential would need
+PME-decomposition / separate-PME-rank communication — asserts; deferred with §4). The three causes:
 
-1. **✅ FIXED (commit 34dc38b) — cross-domain group-potential reduce.** A λ group's *atoms* can live on
-   different ranks; each rank must sum its home atoms' Σφ·Δq and all-reduce. `ConstantPH` was built with
-   a `nullptr` commrec (`runner.cpp` — early construction so a checkpoint can populate λ), so the
+1. **Cross-domain group-potential reduce (commit 34dc38b).** A λ group's *atoms* can live on different
+   ranks; each rank must sum its home atoms' Σφ·Δq and all-reduce. `ConstantPH` was built with a
+   `nullptr` commrec (`runner.cpp` — early construction so a checkpoint can populate λ), so the
    `commMyGroup.sumReduce` in `updateLambdas` and the λ-broadcast in `updateAfterPartition` were dead.
    Added `ConstantPH::setCommrec()`, called in runner once `cr` exists. `sumReduce` is `MPI_Allreduce`
-   (thread-MPI) so every rank integrates λ identically. No-op at single rank (size()>1 guards). The DD
-   atom→local mapping in `updateAfterPartition` (ga2la, home atoms only, no double count) was already
-   correct.
+   (thread-MPI) so every rank integrates λ identically. No-op at single rank (size()>1 guards).
 
-2. **🚧 OPEN — per-atom potential halo back-communication.** The NB kernel adds each pair's potential to
-   BOTH endpoints (`potential[i]+=facel·q_j·coul; potential[j]+=q_i·coul`). Under DD, when a home atom is
-   the *halo* partner of a pair computed on another rank, that contribution lands on the halo copy and is
-   never sent home. The port reduces only `AtomLocality::Local` and has **no potential halo move**, so
-   home atoms miss the cross-boundary contributions.
-   **CORRECTION (grep-verified 2026-07-09): the 2021 FORK DOES NOT SOLVE THIS EITHER.** Its cph uses the
-   SAME design as the port — a separate `nbnxn_atomdata_output_t::potential` buffer (atomdata.h:138), the
-   kernel writes `potential[...]` (kernel_ref_inner.h), and it is reduced nbat→atom into
-   `fr->electrostaticPotential` via `addElectrostaticPotential`. The fork reduces over `AtomLocality::All`
-   (vs the port's `Local`), but there is **zero DD/MPI communication of the per-atom potential anywhere in
-   the fork** (grep of all `src/gromacs` for potential + send/recv/move/bcast/allreduce/dd_ is empty).
-   `dd_move_f` moves only the rvec force (3-wide) — it does not carry the potential. (The `fnb[i+3]` read
-   in `add_nbat_f_to_f_part` reads the nbat force buffer's 4th slot, which the kernel never writes for
-   cph, so it adds 0 — a dead path, NOT a halo mechanism.) So reducing over `All` is a no-op for
-   correctness without a subsequent halo move: the halo indices it fills are never read and never sent
-   home. **The fork's only cph MPI ops are in constant_ph.cpp: the group-potential `sumReduce` and the
-   λ-state `gmx_bcast` — i.e. exactly L0.2 part 1.** The fork is therefore correct only single-rank per
-   window (its actual usage: job array, one window per mdrun, no `-multidir`, no DD).
-   **⇒ L0.2 part 2 is genuinely NEW work, not present upstream.** Preferred fix for the port (keeps the
-   separate buffer, aligns with the GPU plan's `DeviceBuffer<float> potential`): reduce over
-   `AtomLocality::All`, then add an explicit **scalar DD halo move** (reverse of the coordinate halo
-   exchange / analogue of `dd_move_f`) to sum halo→home before the group reduce. Needs a multi-domain
-   test where λ-group atoms straddle a boundary.
-   With part 1 only, RF 4-rank vs 1-rank dV/dλ still differs ~22% on boundary-straddling groups → **DD is
-   NOT yet correct.** Single-rank (M0a, and the production campaign) is unaffected and fully validated.
+2. **Group double-count via ga2la (commit 3229b8f, constant_ph.cpp `updateAfterPartition`).** It built
+   each group's `localAtomIndices` with `ga2la->find()`, which returns BOTH home and halo (imported)
+   copies (`Entry.cell > 0`). A titratable atom that is home on one rank and a halo copy on another was
+   then added to the group on **both** ranks → counted twice in the group `sumReduce`. Fix: use
+   `ga2la->findHome()` (non-null only for `Entry.cell == 0`), so each atom is counted exactly once, on
+   its home rank. (This corrects the earlier note that the ga2la mapping "was already home-only" — it
+   was not.)
+
+3. **Per-atom potential halo back-communication (commit 3229b8f, md.cpp).** The NB kernel adds each
+   pair's potential to BOTH endpoints; under DD a home atom that is the *halo* partner of a pair computed
+   on another rank has that contribution land on the halo copy, which must be summed back to the owner —
+   exactly like forces. The port previously reduced only `AtomLocality::Local` with no halo move. Fix:
+   mirror the force reduction sequence `reduceForces(NonLocal) → dd_move_f → reduceForces(Local)` —
+   reduce the halo range, move it home (potential embedded in an rvec x-component so it rides `dd_move_f`
+   / whichever halo backend is active), THEN reduce the local range. **Order is load-bearing:** `dd_move_f`
+   uses the home-atom slots as forwarding scratch across DD pulses, so at the move they must hold only
+   received (halo) contributions, not the local part (a single `reduce(All) + move` corrupts multi-pulse
+   forwarding).
+   **The 2021 fork does NOT implement any of this** (grep-verified: zero DD/MPI comm of the per-atom
+   potential; `dd_move_f` moves only forces; the `fnb[i+3]` read in `add_nbat_f_to_f_part` is a dead path
+   — the cph kernel writes the separate `out.potential` buffer). The fork's only cph MPI ops are the group
+   `sumReduce` + λ `gmx_bcast` (= bug 1), so it is correct only single-rank per window (its actual usage).
+   ⇒ bugs 2 and 3 are genuinely NEW work, not present upstream.
+
+Diagnosis lesson: bugs 2 and 3 both had to be fixed together — the halo move alone left an over/under
+residual (the double-counted halo copies), and `findHome` alone left an under-count (incomplete
+home-atom potential). Each masked the other in single-fix tests.
