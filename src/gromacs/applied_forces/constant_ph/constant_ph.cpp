@@ -1394,10 +1394,15 @@ void ConstantPH::updateAfterPartition(const gmx_ga2la_t* ga2la, int numLocalAtom
         {
             for (int atomIndex = 0; atomIndex < gmx::ssize(lambdaCoordinate.chargeA); atomIndex++)
             {
-                gmx_ga2la_t::Entry const* entry;
-                if (ga2la == nullptr || (entry = ga2la->find(*atomIt)))
+                // Only include HOME atoms. ga2la->find() also returns halo (imported) copies
+                // (Entry.cell > 0); an atom that is home on one rank and a halo copy on another
+                // would then be added to this group on BOTH ranks and double-counted in the
+                // group-potential sumReduce. findHome() returns non-null only for home atoms
+                // (Entry.cell == 0), so each titratable atom is counted exactly once.
+                const int* localIndexPtr = (ga2la ? ga2la->findHome(*atomIt) : nullptr);
+                if (ga2la == nullptr || localIndexPtr != nullptr)
                 {
-                    const int localIndex = (ga2la ? entry->la : *atomIt);
+                    const int localIndex = (ga2la ? *localIndexPtr : *atomIt);
                     lambdaCoordinate.localAtomIndices.push_back(localIndex);
                     lambdaCoordinate.groupChargeIndices.push_back(atomIndex);
                     lambdaCoordinate.localChargeDifferences.push_back(

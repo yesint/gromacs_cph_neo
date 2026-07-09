@@ -129,6 +129,7 @@
 #include "gromacs/mdtypes/energyhistory.h"
 #include "gromacs/mdtypes/fcdata.h"
 #include "gromacs/mdtypes/forcebuffers.h"
+#include "gromacs/mdtypes/forceoutput.h"
 #include "gromacs/mdtypes/forcerec.h"
 #include "gromacs/mdtypes/group.h"
 #include "gromacs/mdtypes/iforceprovider.h"
@@ -374,6 +375,10 @@ void gmx::LegacySimulator::do_md()
                                ? PinningPolicy::PinnedIfSupported
                                : PinningPolicy::CannotBePinned);
     const t_mdatoms* md = mdAtoms_->mdatoms();
+    // Constant-pH: scratch buffer for the domain-decomposition halo reduction of the per-atom
+    // electrostatic potential (the potential is embedded in the x-component of an rvec so it can
+    // ride dd_move_f, which dispatches to whichever halo backend is active).
+    gmx::PaddedVector<gmx::RVec> cphPotentialHalo;
     if (haveDDAtomOrdering(*cr_))
     {
         // Local state only becomes valid now.
@@ -1302,7 +1307,48 @@ void gmx::LegacySimulator::do_md()
              * accumulated during do_force; reduceElectrostaticPotential adds (+=) to it. */
             if (constantph_)
             {
-                fr_->nbv->reduceElectrostaticPotential(AtomLocality::Local, fr_->electrostaticPotential);
+                if (haveDDAtomOrdering(*cr_) && cr_->dd->nnodes > 1)
+                {
+                    /* Domain decomposition: the non-bonded kernel accumulated the per-atom
+                     * potential on halo atoms too; those contributions must be summed back to
+                     * the owning (home) rank, exactly as forces are. We mirror the force
+                     * reduction sequence (reduceForces NonLocal -> dd_move_f -> reduceForces
+                     * Local), which is NOT interchangeable with a single All-range reduce:
+                     * dd_move_f uses the home-atom slots as forwarding scratch across DD pulses,
+                     * so at the moment of the move they must hold only the received (halo)
+                     * contributions, not the local part. Hence: reduce the halo range, move,
+                     * THEN reduce the local range.
+                     * (The buffer was zeroed before do_force; for PME the reciprocal part is
+                     * added to home atoms during do_force — this is fine for single-rank PME,
+                     * and DD+PME is not yet supported, so home is zero here at the move.) */
+                    fr_->nbv->reduceElectrostaticPotential(AtomLocality::NonLocal,
+                                                           fr_->electrostaticPotential);
+
+                    const int n = int(gmx::ssize(fr_->electrostaticPotential));
+                    cphPotentialHalo.resizeWithPadding(n);
+                    gmx::ArrayRef<gmx::RVec> buf =
+                            cphPotentialHalo.arrayRefWithPadding().unpaddedArrayRef();
+                    for (int a = 0; a < n; a++)
+                    {
+                        buf[a] = { fr_->electrostaticPotential[a], real(0), real(0) };
+                    }
+                    gmx::ForceWithShiftForces fws(
+                            cphPotentialHalo.arrayRefWithPadding(), false, gmx::ArrayRef<gmx::RVec>{});
+                    dd_move_f(cr_->dd, &fws, wallCycleCounters_);
+                    const int numHome = dd_numHomeAtoms(*cr_->dd);
+                    for (int a = 0; a < numHome; a++)
+                    {
+                        fr_->electrostaticPotential[a] = buf[a][XX];
+                    }
+
+                    fr_->nbv->reduceElectrostaticPotential(AtomLocality::Local,
+                                                           fr_->electrostaticPotential);
+                }
+                else
+                {
+                    fr_->nbv->reduceElectrostaticPotential(AtomLocality::Local,
+                                                           fr_->electrostaticPotential);
+                }
             }
 
             /* Constant-pH: update the lambda coordinates using the electrostatic
