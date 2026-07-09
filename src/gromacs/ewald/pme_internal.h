@@ -254,6 +254,9 @@ public:
     gmx::ArrayRef<const real> coefficient;
     //! The forces
     gmx::ArrayRef<gmx::RVec> f;
+    //! Constant-pH: per-atom reciprocal-space potential in this comm's (slab) atom order.
+    //! Filled by the gather and redistributed back to the PP ranks like the forces (nslab > 1).
+    FastVector<real> potentials;
     //! Coordinate buffer, used only with nslab > 1
     FastVector<gmx::RVec> xBuffer;
     //! Coefficient buffer, used only with nslab > 1

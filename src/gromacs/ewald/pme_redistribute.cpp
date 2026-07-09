@@ -223,6 +223,8 @@ void PmeAtomComm::setNumAtoms(const int numAtoms)
             clear_rvec(fBuffer[i]);
         }
         f = fBuffer;
+        /* Constant-pH: slab-order per-atom potential buffer, redistributed back to PP like f. */
+        potentials.resize(numAtoms_);
     }
     if (bSpread)
     {
@@ -469,6 +471,74 @@ void dd_pmeredist_f(struct gmx_pme_t* pme, PmeAtomComm* atc, gmx::ArrayRef<gmx::
             {
                 /* Copy from the receive buffer */
                 f[i] = pme->bufv[atc->bufferIndices[slabIndex]];
+                atc->bufferIndices[slabIndex]++;
+            }
+        }
+    }
+}
+
+void dd_pmeredist_potential(struct gmx_pme_t* pme, PmeAtomComm* atc, gmx::ArrayRef<real> potential, gmx_bool bAddF)
+{
+    /* Constant-pH: redistribute the per-atom reciprocal potential from PME (slab) order back to
+     * PP order, exactly as dd_pmeredist_f does for the forces (scalar analogue; uses pme->bufr,
+     * already sized by the forward coefficient redistribution). */
+    int nnodes_comm, local_pos, buf_pos;
+
+    nnodes_comm = std::min(2 * atc->maxshift, atc->nslab - 1);
+
+    local_pos = atc->sendCount()[atc->slabIndex];
+    buf_pos   = 0;
+    for (int nodeIdx = 0; nodeIdx < nnodes_comm; nodeIdx++)
+    {
+        const int commnode = atc->slabCommSetup[nodeIdx].node_dest;
+        const int scount   = atc->slabCommSetup[nodeIdx].rcount;
+        const int rcount   = atc->sendCount()[commnode];
+        if (scount > 0 || rcount > 0)
+        {
+            pme_dd_sendrecv(atc,
+                            TRUE,
+                            nodeIdx,
+                            atc->potentials.data() + local_pos,
+                            scount * sizeof(real),
+                            pme->bufr.data() + buf_pos,
+                            rcount * sizeof(real));
+            local_pos += scount;
+        }
+        atc->bufferIndices[commnode] = buf_pos;
+        buf_pos += rcount;
+    }
+
+    local_pos = 0;
+    if (bAddF)
+    {
+        for (gmx::Index i = 0; i < potential.ssize(); i++)
+        {
+            const int slabIndex = atc->pd[i];
+            if (slabIndex == atc->slabIndex)
+            {
+                potential[i] += atc->potentials[local_pos];
+                local_pos++;
+            }
+            else
+            {
+                potential[i] += pme->bufr[atc->bufferIndices[slabIndex]];
+                atc->bufferIndices[slabIndex]++;
+            }
+        }
+    }
+    else
+    {
+        for (gmx::Index i = 0; i < potential.ssize(); i++)
+        {
+            const int slabIndex = atc->pd[i];
+            if (slabIndex == atc->slabIndex)
+            {
+                potential[i] = atc->potentials[local_pos];
+                local_pos++;
+            }
+            else
+            {
+                potential[i] = pme->bufr[atc->bufferIndices[slabIndex]];
                 atc->bufferIndices[slabIndex]++;
             }
         }

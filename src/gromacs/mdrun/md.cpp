@@ -1315,30 +1315,33 @@ void gmx::LegacySimulator::do_md()
                      * reduction sequence (reduceForces NonLocal -> dd_move_f -> reduceForces
                      * Local), which is NOT interchangeable with a single All-range reduce:
                      * dd_move_f uses the home-atom slots as forwarding scratch across DD pulses,
-                     * so at the moment of the move they must hold only the received (halo)
-                     * contributions, not the local part. Hence: reduce the halo range, move,
-                     * THEN reduce the local range.
-                     * (The buffer was zeroed before do_force; for PME the reciprocal part is
-                     * added to home atoms during do_force — this is fine for single-rank PME,
-                     * and DD+PME is not yet supported, so home is zero here at the move.) */
+                     * so at the move they must hold only the halo contributions being sent, not
+                     * the local or reciprocal part. Sequence: reduce the halo (NonLocal) range,
+                     * move it home into a buffer whose HOME slots are zeroed (so the PME
+                     * reciprocal part already in fr->electrostaticPotential home atoms is neither
+                     * forwarded nor overwritten), add the received halo contribution to the home
+                     * atoms, THEN reduce the local range. */
                     fr_->nbv->reduceElectrostaticPotential(AtomLocality::NonLocal,
                                                            fr_->electrostaticPotential);
 
-                    const int n = int(gmx::ssize(fr_->electrostaticPotential));
+                    const int n       = int(gmx::ssize(fr_->electrostaticPotential));
+                    const int numHome = dd_numHomeAtoms(*cr_->dd);
                     cphPotentialHalo.resizeWithPadding(n);
                     gmx::ArrayRef<gmx::RVec> buf =
                             cphPotentialHalo.arrayRefWithPadding().unpaddedArrayRef();
                     for (int a = 0; a < n; a++)
                     {
-                        buf[a] = { fr_->electrostaticPotential[a], real(0), real(0) };
+                        /* Home slots zeroed (forwarding scratch / preserve the PME part);
+                         * halo slots carry the non-local NB potential to be sent home. */
+                        const real v = (a < numHome) ? real(0) : fr_->electrostaticPotential[a];
+                        buf[a]       = { v, real(0), real(0) };
                     }
                     gmx::ForceWithShiftForces fws(
                             cphPotentialHalo.arrayRefWithPadding(), false, gmx::ArrayRef<gmx::RVec>{});
                     dd_move_f(cr_->dd, &fws, wallCycleCounters_);
-                    const int numHome = dd_numHomeAtoms(*cr_->dd);
                     for (int a = 0; a < numHome; a++)
                     {
-                        fr_->electrostaticPotential[a] = buf[a][XX];
+                        fr_->electrostaticPotential[a] += buf[a][XX];
                     }
 
                     fr_->nbv->reduceElectrostaticPotential(AtomLocality::Local,

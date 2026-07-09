@@ -1449,19 +1449,26 @@ int gmx_pme_do(struct gmx_pme_t*              pme,
 
             /* Constant-pH: gather the per-atom reciprocal-space electrostatic potential
              * from the same convolved grid used for the forces. Coulomb grid only; the
-             * charge weighting is applied later by the constant-pH module. */
+             * charge weighting is applied later by the constant-pH module.
+             * Without PME decomposition (nnodes==1) the atc order equals the caller's atom
+             * order, so gather straight into the output. With decomposition (nnodes>1) the
+             * atc is in slab order; gather into the slab-order atc.potentials and redistribute
+             * it back to the caller's order below, exactly like the forces (dd_pmeredist_f). */
             if (gridsRef.isCoulomb && !potentials.empty())
             {
-                GMX_RELEASE_ASSERT(pme->nnodes == 1,
-                                   "Constant-pH PME potential gather is only implemented "
-                                   "without PME domain decomposition (single PME rank).");
+                gmx::ArrayRef<real> gatherTarget = potentials;
+                if (pme->nnodes > 1)
+                {
+                    std::fill(atc.potentials.begin(), atc.potentials.end(), real(0));
+                    gatherTarget = atc.potentials;
+                }
 #pragma omp parallel for num_threads(pme->nthread) schedule(static)
                 for (int thread = 0; thread < pme->nthread; thread++)
                 {
                     try
                     {
                         gatherPmePotential(
-                                *pme, pmegrid.grid.grid(), atc, atc.spline[thread], potentials);
+                                *pme, pmegrid.grid.grid(), atc, atc.spline[thread], gatherTarget);
                     }
                     GMX_CATCH_ALL_AND_EXIT_WITH_FATAL_ERROR
                 }
@@ -1752,6 +1759,17 @@ int gmx_pme_do(struct gmx_pme_t*              pme,
             if (pme->haveDDAtomOrdering)
             {
                 dd_pmeredist_f(pme, &pme->atc[d], forcesRef, d == pme->ndecompdim - 1 && pme->bPPnode);
+
+                /* Constant-pH: redistribute the reciprocal potential back to PP order the same
+                 * way, cascading through the decomposition dimensions like the forces. */
+                if (!potentials.empty() && pme->doCoulomb)
+                {
+                    gmx::ArrayRef<real> potentialsRef = (d == pme->ndecompdim - 1)
+                                                                ? potentials.subArray(0, coordinates.size())
+                                                                : pme->atc[d + 1].potentials;
+                    dd_pmeredist_potential(
+                            pme, &pme->atc[d], potentialsRef, d == pme->ndecompdim - 1 && pme->bPPnode);
+                }
             }
         }
 

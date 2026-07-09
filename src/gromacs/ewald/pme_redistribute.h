@@ -59,6 +59,9 @@ class ArrayRef;
 //! Redistributes forces along the dimension gives by \p atc
 void dd_pmeredist_f(gmx_pme_t* pme, PmeAtomComm* atc, gmx::ArrayRef<gmx::RVec> f, gmx_bool bAddF);
 
+//! Constant-pH: redistributes the per-atom reciprocal potential (scalar analogue of dd_pmeredist_f)
+void dd_pmeredist_potential(gmx_pme_t* pme, PmeAtomComm* atc, gmx::ArrayRef<real> potential, gmx_bool bAddF);
+
 //! Redistributes coefficients and when \p bFirst=true coordinates over MPI ranks
 void do_redist_pos_coeffs(gmx_pme_t*                     pme,
                           gmx_bool                       bFirst,
