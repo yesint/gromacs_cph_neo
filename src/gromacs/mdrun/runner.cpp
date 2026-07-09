@@ -1588,6 +1588,14 @@ int Mdrunner::mdrunner()
 
     t_commrec* cr = commRec.get();
 
+    // Constant-pH (lambda dynamics): ConstantPH was created above before the commrec existed
+    // (so a checkpoint could populate it). Inject the real commrec now so the cross-domain
+    // group-potential reduction and lambda-state broadcast work under domain decomposition.
+    if (constantPH)
+    {
+        constantPH->setCommrec(cr);
+    }
+
     // Ensure that all atoms within the same update group are in the
     // same periodic image. Otherwise, a simulation that did not use
     // update groups (e.g. a single-rank simulation) cannot always be

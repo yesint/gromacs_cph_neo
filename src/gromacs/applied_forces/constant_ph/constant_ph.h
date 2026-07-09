@@ -111,6 +111,15 @@ public:
     //! Sets charges for particles coupled to lambda's, indexed by local index
     void setLambdaCharges(gmx::ArrayRef<real> localCharges) const;
 
+    /*! \brief Set the communicator used for multi-rank (DD) reductions.
+     *
+     * ConstantPH is constructed early (before the commrec exists) so a checkpoint can
+     * populate its lambda coordinates. The commrec is only needed at run time, for the
+     * cross-domain group-potential reduction in updateLambdas() and the lambda-state
+     * broadcast in updateAfterPartition(). Inject it once it is available. Passing nullptr
+     * (or a single-rank commrec) keeps the single-rank behaviour. */
+    void setCommrec(t_commrec* commrec) { commrec_ = commrec; }
+
     //! Updates localAtomIndices, isLambda, allLambdaAtoms after partition
     //
     // Without DD, pass nullptr for ga2la
