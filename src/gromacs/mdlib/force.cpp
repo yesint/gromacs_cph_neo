@@ -161,7 +161,8 @@ void CpuPpLongRangeNonbondeds::calculate(gmx_pme_t*                     pmedata,
                                          gmx::ArrayRef<const real>      lambda,
                                          gmx::ArrayRef<const gmx::RVec> mu_tot,
                                          const gmx::StepWorkload&       stepWork,
-                                         const DDBalanceRegionHandler&  ddBalanceRegionHandler)
+                                         const DDBalanceRegionHandler&  ddBalanceRegionHandler,
+                                         gmx::ArrayRef<real>            electrostaticPotential)
 {
     const bool computePmeOnCpu = (usingPme(coulombInteractionType_) || usingLJPme(vanDerWaalsType_))
                                  && thisRankHasPmeDuty(commrec->dd)
@@ -287,7 +288,8 @@ void CpuPpLongRangeNonbondeds::calculate(gmx_pme_t*                     pmedata,
                             lambda[static_cast<int>(FreeEnergyPerturbationCouplingType::Vdw)],
                             &ewaldOutput.dvdl[FreeEnergyPerturbationCouplingType::Coul],
                             &ewaldOutput.dvdl[FreeEnergyPerturbationCouplingType::Vdw],
-                            stepWork);
+                            stepWork,
+                            electrostaticPotential);
                     wallcycle_stop(wcycle_, WallCycleCounter::PmeMesh);
                     if (status != 0)
                     {

@@ -893,7 +893,9 @@ int gmx_pmeonly(struct gmx_pme_t**              pmeFromRunnerPtr,
                        lambda_lj,
                        &output.coulombDvdl_,
                        &output.lennardJonesDvdl_,
-                       stepWork);
+                       stepWork,
+                       /* Constant-pH PME potential is not supported on separate PME ranks. */
+                       gmx::ArrayRef<real>());
             output.forces_ = pme_pp->f;
         }
 

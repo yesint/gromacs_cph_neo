@@ -2239,7 +2239,12 @@ void do_force(FILE*                         fplog,
                                        lambda,
                                        dipoleData.muStateAB,
                                        stepWork,
-                                       ddBalanceRegionHandler);
+                                       ddBalanceRegionHandler,
+                                       /* Constant-pH: accumulate the reciprocal-space
+                                        * electrostatic potential into the same buffer the
+                                        * NB kernel fills (both add; cleared before do_force). */
+                                       fr->constantPH ? fr->electrostaticPotential
+                                                      : gmx::ArrayRef<real>());
     }
 
     wallcycle_stop(wcycle, WallCycleCounter::Force);

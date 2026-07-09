@@ -182,7 +182,8 @@ public:
                    gmx::ArrayRef<const real>      lambda,
                    gmx::ArrayRef<const gmx::RVec> mu_tot,
                    const gmx::StepWorkload&       stepWork,
-                   const DDBalanceRegionHandler&  ddBalanceRegionHandler);
+                   const DDBalanceRegionHandler&  ddBalanceRegionHandler,
+                   gmx::ArrayRef<real>            electrostaticPotential);
 
 private:
     //! Number of particles for test particle insertion

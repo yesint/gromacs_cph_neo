@@ -1247,10 +1247,16 @@ void gmx::LegacySimulator::do_md()
                 }
 
                 /* Constant-pH: set the lambda-interpolated charges before the force
-                 * calculation so the non-bonded kernel sees the current lambda state. */
+                 * calculation so the non-bonded kernel sees the current lambda state, and
+                 * clear the per-atom electrostatic potential. The real-space (NB kernel) and
+                 * reciprocal-space (PME gather) contributions both accumulate into this buffer
+                 * during/after do_force, so it must be zeroed before the force calculation. */
                 if (constantph_)
                 {
                     constantph_->setLambdaCharges(mdAtoms_->mdatoms()->chargeA);
+                    std::fill(fr_->electrostaticPotential.begin(),
+                              fr_->electrostaticPotential.end(),
+                              real(0));
                 }
 
                 /* The coordinates (x) are shifted (to get whole molecules)
@@ -1289,12 +1295,13 @@ void gmx::LegacySimulator::do_md()
                          ddBalanceRegionHandler);
             }
 
-            /* Constant-pH: reduce the per-atom electrostatic potential that the
+            /* Constant-pH: reduce the per-atom real-space electrostatic potential that the
              * non-bonded kernel accumulated (nbat order, per thread) into
-             * fr_->electrostaticPotential, which aliases constantph_->potential(). */
+             * fr_->electrostaticPotential, which aliases constantph_->potential(). The buffer
+             * was zeroed before do_force and already holds the reciprocal-space (PME) part
+             * accumulated during do_force; reduceElectrostaticPotential adds (+=) to it. */
             if (constantph_)
             {
-                std::fill(fr_->electrostaticPotential.begin(), fr_->electrostaticPotential.end(), real(0));
                 fr_->nbv->reduceElectrostaticPotential(AtomLocality::Local, fr_->electrostaticPotential);
             }
 

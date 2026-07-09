@@ -1187,7 +1187,8 @@ int gmx_pme_do(struct gmx_pme_t*              pme,
                real                           lambda_lj,
                real*                          dvdlambda_q,
                real*                          dvdlambda_lj,
-               const gmx::StepWorkload&       stepWork)
+               const gmx::StepWorkload&       stepWork,
+               gmx::ArrayRef<real>            potentials)
 {
     GMX_ASSERT(pme->runMode == PmeRunMode::CPU,
                "gmx_pme_do should not be called on the GPU PME run.");
@@ -1239,7 +1240,13 @@ int gmx_pme_do(struct gmx_pme_t*              pme,
      * that don't yet have them.
      */
 
-    bool bDoSplines = pme->bFEP || (pme->doCoulomb && pme->doLJ);
+    /* Constant-pH: when gathering the per-atom reciprocal potential (potentials non-empty)
+     * we must compute b-splines for ALL atoms, not just those with non-zero charge. A
+     * titratable atom can be neutral at the current lambda (charge 0) yet still need its
+     * potential for dV/dlambda (its charge-difference is non-zero). Without this, such atoms
+     * are skipped in make_bsplines and their gathered potential is invalid. Same treatment
+     * that free-energy (bFEP) already forces. */
+    bool bDoSplines = pme->bFEP || (pme->doCoulomb && pme->doLJ) || !potentials.empty();
 
     /* We need a maximum of four separate PME calculations:
      * grid_index=0: Coulomb PME with charges from state A
@@ -1439,6 +1446,27 @@ int gmx_pme_do(struct gmx_pme_t*              pme,
 
 
             inc_nrnb(nrnb, eNR_GATHERFBSP, pme->pme_order * pme->pme_order * pme->pme_order * atc.numAtoms());
+
+            /* Constant-pH: gather the per-atom reciprocal-space electrostatic potential
+             * from the same convolved grid used for the forces. Coulomb grid only; the
+             * charge weighting is applied later by the constant-pH module. */
+            if (gridsRef.isCoulomb && !potentials.empty())
+            {
+                GMX_RELEASE_ASSERT(pme->nnodes == 1,
+                                   "Constant-pH PME potential gather is only implemented "
+                                   "without PME domain decomposition (single PME rank).");
+#pragma omp parallel for num_threads(pme->nthread) schedule(static)
+                for (int thread = 0; thread < pme->nthread; thread++)
+                {
+                    try
+                    {
+                        gatherPmePotential(
+                                *pme, pmegrid.grid.grid(), atc, atc.spline[thread], potentials);
+                    }
+                    GMX_CATCH_ALL_AND_EXIT_WITH_FATAL_ERROR
+                }
+            }
+
             /* Note: this wallcycle region is opened above inside an OpenMP
                region, so take care if refactoring code here. */
             wallcycle_stop(wcycle, WallCycleCounter::PmeGather);

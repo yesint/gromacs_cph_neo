@@ -416,3 +416,53 @@ real gather_energy_bsplines(const gmx_pme_t& pme, gmx::ArrayRef<const real> grid
 
     return energy;
 }
+
+void gatherPmePotential(const gmx_pme_t&          pme,
+                        gmx::ArrayRef<const real> grid,
+                        const PmeAtomComm&        atc,
+                        const splinedata_t&       spline,
+                        gmx::ArrayRef<real>       potentials)
+{
+    const int   order   = pme.pme_order;
+    const int   gridNY  = pme.pmegrid_ny;
+    const int   gridNZ  = pme.pmegrid_nz;
+    const real* gmx_restrict gridPtr = grid.data();
+
+    /* Loop over this thread's atoms (spline.ind[nn] is the local atom index; for a
+     * single-rank run this matches the local/home-atom order of \p potentials). */
+    for (int nn = 0; nn < spline.n; nn++)
+    {
+        const int  n      = spline.ind[nn];
+        const int  norder = nn * order;
+        const int* idxptr = atc.idx[n];
+
+        const int i0 = idxptr[XX];
+        const int j0 = idxptr[YY];
+        const int k0 = idxptr[ZZ];
+
+        /* Pointer arithmetic alert, next three statements */
+        const real* gmx_restrict thx = spline.theta.coefficients[XX] + norder;
+        const real* gmx_restrict thy = spline.theta.coefficients[YY] + norder;
+        const real* gmx_restrict thz = spline.theta.coefficients[ZZ] + norder;
+
+        real pot = 0;
+        for (int ithx = 0; ithx < order; ithx++)
+        {
+            const int  index_x = (i0 + ithx) * gridNY * gridNZ;
+            const real tx      = thx[ithx];
+
+            for (int ithy = 0; ithy < order; ithy++)
+            {
+                const int  index_xy = index_x + (j0 + ithy) * gridNZ;
+                const real ty       = thy[ithy];
+
+                for (int ithz = 0; ithz < order; ithz++)
+                {
+                    pot += tx * ty * thz[ithz] * gridPtr[index_xy + (k0 + ithz)];
+                }
+            }
+        }
+
+        potentials[n] += pot;
+    }
+}

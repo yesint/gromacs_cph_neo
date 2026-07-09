@@ -265,7 +265,8 @@ int gmx_pme_do(struct gmx_pme_t*              pme,
                real                           lambda_lj,
                real*                          dvdlambda_q,
                real*                          dvdlambda_lj,
-               const gmx::StepWorkload&       stepWork);
+               const gmx::StepWorkload&       stepWork,
+               gmx::ArrayRef<real>            potentials);
 
 /*! \brief Calculate the PME grid energy V for n charges.
  *

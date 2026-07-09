@@ -78,4 +78,24 @@ void gather_f_bsplines(const gmx_pme_t&          pme,
  */
 real gather_energy_bsplines(const gmx_pme_t& pme, gmx::ArrayRef<const real> grid, const PmeAtomComm& atc);
 
+/*! \brief Gather the per-atom reciprocal-space electrostatic potential from the grid.
+ *
+ * Constant-pH: accumulates the PME mesh (reciprocal-space) electrostatic potential at each
+ * local atom into \p potentials (indexed by local atom index), the reciprocal-space part of
+ * the dV/dlambda driving force. Mirrors gather_f_bsplines but contracts the convolved grid
+ * with the theta splines only (no derivative, no charge prefactor — the charge weighting is
+ * applied later by the constant-pH module). Single-rank only (no PME domain decomposition).
+ *
+ * \param[in]     pme         General PME settings
+ * \param[in]     grid        The convolved potential grid (same as used for the force gather)
+ * \param[in]     atc         Atom indices for the local atoms
+ * \param[in]     spline      The spline coefficients for the atoms
+ * \param[in,out] potentials  Per-atom potential buffer, accumulated into
+ */
+void gatherPmePotential(const gmx_pme_t&          pme,
+                        gmx::ArrayRef<const real> grid,
+                        const PmeAtomComm&        atc,
+                        const splinedata_t&       spline,
+                        gmx::ArrayRef<real>       potentials);
+
 #endif
