@@ -184,6 +184,13 @@ struct NBAtomDataGpu
     //! Constant-pH: whether the NB kernel accumulates the per-atom electrostatic potential
     bool computePotential = false;
 
+    //! Constant-pH (GPU-resident path): per-atom lambda-interpolated charge in ATOM order (size
+    //! \ref numAtoms). On the resident path the X buffer-op preserves xq.w and no full x+q H2D
+    //! occurs, so the current charges are re-packed into xq.w from this buffer every step by the
+    //! X buffer-op kernel. Filled by a host H2D of mdatoms->chargeA (bring-up) or, later, by a
+    //! device scatter from the updated lambda values. Only allocated when \ref computePotential.
+    DeviceBuffer<float> lambdaCharges;
+
     //! LJ energy output, size 1
     DeviceBuffer<float> eLJ;
     //! Electrostatics energy input, size 1

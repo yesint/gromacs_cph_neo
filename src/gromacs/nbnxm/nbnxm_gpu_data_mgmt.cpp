@@ -1057,6 +1057,9 @@ void gpu_init_atomdata(NbnxmGpu* nb, const nbnxn_atomdata_t* nbat)
         if (atdat->computePotential)
         {
             allocateDeviceBuffer(&atdat->potential, numAlloc, deviceContext);
+            /* GPU-resident path: per-atom charge buffer (atom order) used to re-pack xq.w every
+             * step (the X buffer-op preserves xq.w and there is no per-step full x+q H2D). */
+            allocateDeviceBuffer(&atdat->lambdaCharges, numAlloc, deviceContext);
         }
 
         if (useLjCombRule(nb->nbparam->vdwType))
@@ -1340,22 +1343,26 @@ void gpu_launch_cpyback(NbnxmGpu*                nb,
                 bDoTime ? timers->xf[atomLocality].nb_d2h.fetchNextEvent() : nullptr);
 
         issueClFlushInStream(deviceStream);
+    }
 
-        /* Constant-pH: DtoH the per-atom electrostatic potential into the nbat host output
-         * buffer (nbat order), so it is reduced to atom order by the same
-         * reduceElectrostaticPotential() path as the CPU kernels. Rides the same classic-path
-         * (!useGpuFBufferOps) local-stream sync as the force copy-back. */
-        if (adat->computePotential)
-        {
-            copyFromDeviceBuffer(nbatom->outputBuffer(0).potential.data() + atomsRange.begin(),
-                                 &adat->potential,
-                                 atomsRange.begin(),
-                                 atomsRange.size(),
-                                 deviceStream,
-                                 GpuApiCallBehavior::Async,
-                                 nullptr);
-            issueClFlushInStream(deviceStream);
-        }
+    /* Constant-pH: DtoH the per-atom electrostatic potential into the nbat host output buffer
+     * (nbat order), so it is reduced to atom order by the same reduceElectrostaticPotential()
+     * path as the CPU kernels. This is NOT gated on the force buffer-op flag: on the classic
+     * path (useGpuFBufferOps == false) the force is copied back above, but on the GPU-resident
+     * path (buffer ops ON, GPU update) the force stays on the device while the host still needs
+     * the potential to drive the lambda-dynamics ODE. So the potential copy-back must fire on
+     * both paths whenever the potential is being computed. (Once the device group-reduce lands
+     * this whole D2H is replaced by a tiny groupPotential transfer.) */
+    if (adat->computePotential)
+    {
+        copyFromDeviceBuffer(nbatom->outputBuffer(0).potential.data() + atomsRange.begin(),
+                             &adat->potential,
+                             atomsRange.begin(),
+                             atomsRange.size(),
+                             deviceStream,
+                             GpuApiCallBehavior::Async,
+                             nullptr);
+        issueClFlushInStream(deviceStream);
     }
 
     /* After the non-local D2H is launched the nonlocal_done event can be
@@ -1577,6 +1584,41 @@ void gpu_copy_xq_to_gpu(NbnxmGpu* nb, const nbnxn_atomdata_t* nbatom, const Atom
     nbnxnInsertNonlocalGpuDependency(nb, iloc);
 }
 
+/*! \brief Constant-pH (GPU-resident path): upload the per-atom lambda-interpolated charges
+ * (atom order) into the device \ref NBAtomDataGpu::lambdaCharges buffer.
+ *
+ * On the resident path the X buffer-op preserves xq.w and there is no per-step full x+q H2D, so
+ * the current charges must be made available on the device for the X buffer-op to re-pack into
+ * xq.w. This is the host-driven refresh used during bring-up; a later work package replaces it
+ * with an on-device scatter from the updated lambda values (no host round-trip). GPU builds are
+ * always single precision, so \c real == \c float and the copy is a straight H2D. */
+void nbnxmGpuUploadLambdaCharges(NbnxmGpu* nb, gmx::ArrayRef<const float> charges)
+{
+    GMX_ASSERT(nb, "Need a valid nbnxn_gpu object");
+    NBAtomDataGpu*      adat         = nb->atdat;
+    const DeviceStream& deviceStream = *nb->deviceStreams[InteractionLocality::Local];
+    GMX_ASSERT(adat->computePotential,
+               "lambdaCharges is only allocated for constant-pH (computePotential) runs");
+    /* The device atom data (numAtoms/numAtomsAlloc and the lambdaCharges buffer) is only sized
+     * during the first pair search inside do_force; numAtoms is -1 before that. This uploader is
+     * called from the MD loop BEFORE do_force, so on the very first step there is nothing to
+     * upload yet - and that step is a neighbor-search step anyway, where the full x+q H2D packs
+     * xq.w from the host charges, so the X buffer-op charge path is not used. Skip until the
+     * device buffers exist. */
+    if (adat->numAtomsAlloc <= 0)
+    {
+        return;
+    }
+    const int numToCopy = std::min(int(gmx::ssize(charges)), adat->numAtomsAlloc);
+    copyToDeviceBuffer(&adat->lambdaCharges,
+                       charges.data(),
+                       0,
+                       numToCopy,
+                       deviceStream,
+                       GpuApiCallBehavior::Async,
+                       nullptr);
+}
+
 
 /* Initialization for X buffer operations on GPU. */
 void nbnxn_gpu_init_x_to_nbat_x(const GridSet& gridSet, NbnxmGpu* gpu_nbv)
@@ -1718,6 +1760,7 @@ void gpu_free(NbnxmGpu* nb)
     freeDeviceBuffer(&(nb->atdat->xq));
     freeDeviceBuffer(&(nb->atdat->f));
     freeDeviceBuffer(&(nb->atdat->potential));
+    freeDeviceBuffer(&(nb->atdat->lambdaCharges));
     freeDeviceBuffer(&(nb->atdat->eLJ));
     freeDeviceBuffer(&(nb->atdat->eElec));
     freeDeviceBuffer(&(nb->atdat->dvdlLJ));

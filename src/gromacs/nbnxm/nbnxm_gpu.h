@@ -91,6 +91,12 @@ void gpu_copy_xq_to_gpu(NbnxmGpu gmx_unused*                      nb,
                         const struct nbnxn_atomdata_t gmx_unused* nbdata,
                         AtomLocality gmx_unused                   aloc) GPU_FUNC_TERM;
 
+/*! \brief Constant-pH (GPU-resident): H2D the per-atom lambda charges (atom order) so the
+ * X buffer-op can re-pack them into xq.w each step. \p charges must cover all local atoms. */
+GPU_FUNC_QUALIFIER
+void nbnxmGpuUploadLambdaCharges(NbnxmGpu gmx_unused* nb,
+                                 gmx::ArrayRef<const float> gmx_unused charges) GPU_FUNC_TERM;
+
 /*! \brief
  * Launch asynchronously the nonbonded force calculations.
  *

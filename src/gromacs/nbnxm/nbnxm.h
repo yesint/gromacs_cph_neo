@@ -428,6 +428,10 @@ public:
     //! Constant-pH: re-push per-atom charges into the nbat after lambda charges changed.
     void setAtomCharges(ArrayRef<const real> chargesA);
 
+    //! Constant-pH (GPU-resident path): H2D the per-atom lambda charges (atom order) into the
+    //! device buffer the X buffer-op re-packs into xq.w each step. No-op without a GPU nbv.
+    void uploadLambdaChargesToGpu(ArrayRef<const real> chargesA);
+
     /*! \brief Get the number of atoms for a given locality
      *
      * \param [in] locality   Local or non-local

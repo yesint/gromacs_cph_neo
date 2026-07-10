@@ -161,19 +161,25 @@ SimulationWorkload createSimulationWorkload(const gmx::MDLogger& mdlog,
                         "The 'GPU buffer ops' disabled by the "
                         "GMX_GPU_DISABLE_BUFFER_OPS environment variable.");
     }
-    // Constant-pH needs the classic buffer-ops path on the GPU: the per-atom electrostatic
-    // potential must be copied back (F buffer ops off => CPU force reduction + the potential D2H)
-    // and the lambda-charges must be pushed every step (X buffer ops off => full x+q H2D). So
-    // buffer ops are disabled for lambda dynamics (which also runs with GPU update off).
+    // Constant-pH buffer-ops policy depends on whether GPU update is used:
+    //  - CLASSIC cph GPU (GPU update OFF): buffer ops must be OFF. The force reduction runs on the
+    //    CPU (F buffer ops off) and the lambda-charges are pushed every step by a full x+q H2D
+    //    (X buffer ops off). This is the validated non-resident path.
+    //  - RESIDENT cph GPU (GPU update ON): buffer ops are REQUIRED (featuresRequireGpuBufferOps),
+    //    so they must be allowed. x/v/f stay on the device; the per-atom potential is copied back
+    //    (or device-reduced) and the device charge is refreshed every step by a scatter kernel +
+    //    PME coefficient H2D rather than the full x+q H2D (which would clobber the resident coords).
+    // Hence: disable buffer ops for lambda dynamics ONLY when GPU update is off.
     // x/f transform is done on GPU by default unless it is not unsupported (with MTS) or disabled (with the env. var.)
+    const bool cphForcesBufferOpsOff = inputrec.lambda_dynamics && !useGpuForUpdate;
     simulationWorkload.useGpuXBufferOpsWhenAllowed =
             GpuConfigurationCapabilities::BufferOps && useGpuForNonbonded && !inputrec.useMts
             && !(useReplicaExchange && !useGpuForUpdate) && !disableGpuBufferOps
-            && !inputrec.lambda_dynamics;
+            && !cphForcesBufferOpsOff;
     simulationWorkload.useGpuFBufferOpsWhenAllowed =
             GpuConfigurationCapabilities::BufferOps && useGpuForNonbonded && !inputrec.useMts
             && !(useReplicaExchange && !useGpuForUpdate) && !disableGpuBufferOps
-            && !inputrec.lambda_dynamics;
+            && !cphForcesBufferOpsOff;
     if (featuresRequireGpuBufferOps)
     {
         GMX_RELEASE_ASSERT(simulationWorkload.useGpuXBufferOpsWhenAllowed

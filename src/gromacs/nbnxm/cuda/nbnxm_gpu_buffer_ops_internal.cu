@@ -73,7 +73,8 @@ static __global__ void nbnxn_gpu_x_to_nbat_x_kernel(int numColumns,
                                                     const int* __restrict__ gm_numAtoms,
                                                     const int* __restrict__ gm_cellIndex,
                                                     int cellOffset,
-                                                    int numAtomsPerCell)
+                                                    int numAtomsPerCell,
+                                                    const float* __restrict__ gm_charge)
 {
 
     const float farAway = -1000000.0F;
@@ -98,7 +99,16 @@ static __global__ void nbnxn_gpu_x_to_nbat_x_kernel(int numColumns,
         {
             if (threadIndex < numAtoms)
             {
-                *gm_xqDest = gm_x[gm_atomIndex[threadIndex + offset]];
+                const int atomIndex = gm_atomIndex[threadIndex + offset];
+                *gm_xqDest          = gm_x[atomIndex];
+                /* Constant-pH (GPU-resident path): the X buffer-op is the only per-step writer of
+                 * the nbnxm xq buffer (no full x+q H2D), so it must also refresh the charge in the
+                 * .w component from the current lambda-interpolated charges. gm_charge is nullptr
+                 * for non-constant-pH runs, leaving .w untouched (bit-identical to before). */
+                if (gm_charge != nullptr)
+                {
+                    gm_xq[threadIndex + offset].w = gm_charge[atomIndex];
+                }
             }
             else
             {
@@ -141,8 +151,22 @@ void launchNbnxmKernelTransformXToXq(const Grid&          grid,
     const int* d_atomIndices = nb->atomIndices;
     const int* d_cxy_na      = &nb->cxy_na[numColumnsMax * gridId];
     const int* d_cxy_ind     = &nb->cxy_ind[numColumnsMax * gridId];
-    const auto kernelArgs    = prepareGpuKernelArguments(
-            kernelFn, config, &numColumns, &d_xq, &d_xFloat3, &d_atomIndices, &d_cxy_na, &d_cxy_ind, &cellOffset, &numAtomsPerCell);
+    /* Constant-pH (GPU-resident path): pass the device lambda-charge buffer so the kernel refreshes
+     * xq.w in place. nullptr for non-constant-pH runs (lambdaCharges only allocated when
+     * computePotential), which leaves the xq.w-packing code path fully disabled. */
+    const float* d_charge =
+            nb->atdat->computePotential ? static_cast<const float*>(nb->atdat->lambdaCharges) : nullptr;
+    const auto kernelArgs = prepareGpuKernelArguments(kernelFn,
+                                                      config,
+                                                      &numColumns,
+                                                      &d_xq,
+                                                      &d_xFloat3,
+                                                      &d_atomIndices,
+                                                      &d_cxy_na,
+                                                      &d_cxy_ind,
+                                                      &cellOffset,
+                                                      &numAtomsPerCell,
+                                                      &d_charge);
     launchGpuKernel(kernelFn, config, deviceStream, nullptr, "XbufferOps", kernelArgs);
 }
 

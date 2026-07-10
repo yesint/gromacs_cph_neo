@@ -1262,6 +1262,16 @@ void gmx::LegacySimulator::do_md()
                     std::fill(fr_->electrostaticPotential.begin(),
                               fr_->electrostaticPotential.end(),
                               real(0));
+                    /* GPU-resident path: with buffer ops on, the nbnxm X buffer-op is the only
+                     * per-step writer of xq and it re-packs xq.w from a device charge buffer (no
+                     * full x+q H2D, which would clobber the resident coordinates). Push the freshly
+                     * interpolated charges to that device buffer now, before do_force runs the X
+                     * buffer-op. Enqueued on the nbnxm local stream, so it is ordered before the
+                     * buffer-op on the same stream. */
+                    if (useGpuForUpdate)
+                    {
+                        fr_->nbv->uploadLambdaChargesToGpu(mdAtoms_->mdatoms()->chargeA);
+                    }
                 }
 
                 /* The coordinates (x) are shifted (to get whole molecules)

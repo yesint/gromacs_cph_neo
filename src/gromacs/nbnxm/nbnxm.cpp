@@ -216,6 +216,20 @@ void nonbonded_verlet_t::setAtomCharges(ArrayRef<const real> chargesA)
     nbat_->setCharges(pairSearch_->gridSet(), chargesA);
 }
 
+void nonbonded_verlet_t::uploadLambdaChargesToGpu(ArrayRef<const real> chargesA)
+{
+    if (gpuNbv_ == nullptr)
+    {
+        return;
+    }
+    // GPU builds are always single precision, so real == float and the reinterpret is a no-op cast.
+    static_assert(sizeof(real) == sizeof(float),
+                  "GPU constant-pH lambda-charge upload assumes single precision (real == float)");
+    nbnxmGpuUploadLambdaCharges(
+            gpuNbv_, ArrayRef<const float>(reinterpret_cast<const float*>(chargesA.data()),
+                                           reinterpret_cast<const float*>(chargesA.data()) + chargesA.size()));
+}
+
 int nonbonded_verlet_t::getNumAtoms(const AtomLocality locality) const
 {
     int numAtoms = 0;
