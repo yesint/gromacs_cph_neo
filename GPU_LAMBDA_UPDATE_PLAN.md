@@ -145,12 +145,27 @@ Layer 0 alone upgrades the port from "RF single-rank" to "general CPU cph." It i
   - TODO buffers: `potentialsSize/SizeAlloc` in `PmeGpu::archSpecific`; realloc `d_potentials` +
     `resizeWithPadding(h_potentials)` in `pme_gpu_realloc_forces`; free in `pme_gpu_free_forces`; D2H
     `d_potentials→h_potentials` in `pme_gpu_copy_output_forces`; pin `h_potentials` in the init.
-  - TODO kernel (`pme_gather.cu`, the crux): in `sumForceComponents` also accumulate the potential
-    (`potential += tdx.x*tdy.x*fxy1`, theta·grid, no derivative); reduce it across the 4 threads/atom in
-    `reduce_atom_forces` (add a `reducePotential` path, warp-shuffle like the fork); write
-    `gm_potentials[atomIndexGlobal]` on the splineIndex%4==3 thread. Template/launch-gate on cph so
-    non-cph PME pays nothing (fork uses a `reducePotential` template arg). Replicate to
-    sycl/hip/opencl gather later.
+  - ✅ host plumbing DONE + compiles (commit d88f48c): buffers/staging/copy-back, the
+    computePotential flag chain (gmx_pme_t→PmeGpuSettings), PmeOutput.potentials_, getOutput,
+    pme_gpu_reduce_outputs + the try_finish_task/wait_and_reduce/sim_util wiring (both wait paths pass
+    fr->electrostaticPotential when constantPH).
+  - 🚧 TODO kernel (`pme_gather.cu`, the remaining crux):
+    (1) `sumForceComponents` — add a `float* potential` out param, accumulate `*potential +=
+        tdx.x*tdy.x*fxy1` (all-theta, no derivative) in the inner loop; update its one caller (~L612).
+    (2) In the gather kernel, after `reduce_atom_forces`, add a SEPARATE warp reduction of the potential
+        over the atom's `atomDataSize` lanes (`for (delta=atomDataSize/2; delta>=1; delta>>=1) potential
+        += __shfl_down_sync(mask, potential, delta, atomDataSize)`), then the `splineIndex==0` lane writes
+        `gm_potentials[atomIndexGlobal]` (= `kernelParams.atoms.d_potentials`). Simpler + lower-risk than
+        reworking the fused fx/fy/fz shuffle (the fork's approach). Gate on a runtime
+        `kernelParams` flag (add `bool computeElectrostaticPotential`, set at launch from
+        settings) + `if constexpr(order==4)`; non-cph pays only the sumForceComponents FMA.
+    (3) **‼️ chargeCheck/uncharged-atom subtlety (the L0.1 bug, GPU edition):** `sumForceComponents` is
+        inside `if (chargeCheck)`, and splines may be skipped for zero-charge atoms — but a titratable
+        atom that is NEUTRAL at the current λ (HIS at λ=1, BUF at λ=0.5) still needs its reciprocal
+        potential (its charge-difference is non-zero). Must ensure splines are computed AND the potential
+        is gathered for uncharged atoms (GPU analogue of the L0.1 `bDoSplines |= !potentials.empty()`
+        fix). Verify on the M0a HIS/BUF groups specifically — they were exactly the ones that broke on CPU.
+    Replicate to sycl/hip/opencl gather later.
   - TODO output+wiring: `pme_gpu_getOutput` sets `output.potentials_ = staging.h_potentials`;
     `pme_gpu_reduce_outputs`/`pme_gpu_wait_and_reduce` add `potentials_` into an
     `electrostaticPotential` arg (as the fork's `pme_gpu.cpp` does); thread `fr->electrostaticPotential`
