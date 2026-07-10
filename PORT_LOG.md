@@ -272,3 +272,31 @@ The GPU PME gather kernel now produces the per-atom reciprocal potential (the la
   - The mixed control (`-nb gpu -pme cpu`) stays at 1.6e-5 on both (= the already-validated L1.1 NB
     level); the L1.2-isolated delta (gpuPME vs cpuPME) matches the full-GPU-vs-oracle error and tracks
     group magnitude ⇒ pure single-precision cuFFT/gather floor, not a bug. **CUDA PME is finalized.**
+
+### ✅ L3 DONE — GPU-resident constant-pH update loop (2026-07-10, commits 0c8244f R0 + e300526 R0b)
+cph now runs fully GPU-resident: `-nb gpu -pme gpu -update gpu` keeps x/v/f on the device with the
+leapfrog+constraints integrator on the GPU. Buffer ops ON removes the classic per-step full x+q H2D,
+so two data paths had to be rebuilt for cph, plus the workload guards:
+- **Charge → NB xq.w:** the nbnxm X buffer-op preserves xq.w and is now the only per-step xq writer, so
+  it also re-packs xq.w from a new device charge buffer `NBAtomDataGpu::lambdaCharges` (atom order),
+  H2D'd from the λ-interpolated `mdatoms->chargeA` each step (`uploadLambdaChargesToGpu`). nullptr for
+  non-cph ⇒ the .w path is fully off (bit-identical). Guard `numAtomsAlloc>0` (numAtoms is -1 until the
+  first pair search; the first step is NS and its full H2D packs xq.w anyway — a -1-length copy was the
+  first bug, surfacing as a sticky `cudaErrorInvalidValue` at teardown).
+- **Charge → PME d_coefficients:** uploaded only at NS, so `-pme gpu` resident needs a per-step refresh:
+  new light `gmx_pme_reinit_charges_gpu` (charge-only H2D, grid 0, cph is non-FEP), wired in md.cpp
+  gated on `useGpuPme` (no-op for `-pme cpu`, which reads `mdatoms->chargeA` directly).
+- **Potential D2H:** moved out of the `!useGpuFBufferOps` guard so it also fires on the resident path
+  (host still needs the per-atom potential to drive the λ ODE while forces stay on device); synced by the
+  existing `gpu_wait_finish_task` over the whole local stream.
+- **Guards:** `decidegpuusage` allows `useGpuUpdate` for cph only single-GPU (no DD, no separate PME
+  rank); `decidesimulationworkload` keeps buffer ops off for cph ONLY when GPU update is off, so the
+  validated classic (non-resident) GPU path is unchanged. ‼️ GPU update needs v-rescale/no thermostat
+  (NOT Nose-Hoover) — the validation tpr was regrompp'd with `tcoupl=v-rescale` and a heavy
+  `lambda-particle-mass` (stable fresh start).
+- **Validated (RTX 3080, 88k all-atom PME cph):** R0 (`-pme cpu` resident) single-point dV/dλ vs CPU
+  **1.4e-5**, 1000-step λ vs classic-GPU identical through step ~50 → FP divergence 2.5e-3@1000; R0b
+  (`-pme gpu`, FULL all-GPU resident) single-point **6.0e-5** (= the L1.2 PME floor), 1000-step FP
+  divergence 4.9e-3@1000, λ actively titrating (range [-0.04, 1.06]).
+- **Still O(Natoms) per step** (correctness-first): potential D2H + NB charge H2D + PME coeff H2D. The
+  device group-reduce (L2.2) and device charge-scatter (L2.3) that make transfers O(Ngroups) are next.
