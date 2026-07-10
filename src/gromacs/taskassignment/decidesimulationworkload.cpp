@@ -161,13 +161,19 @@ SimulationWorkload createSimulationWorkload(const gmx::MDLogger& mdlog,
                         "The 'GPU buffer ops' disabled by the "
                         "GMX_GPU_DISABLE_BUFFER_OPS environment variable.");
     }
+    // Constant-pH needs the classic buffer-ops path on the GPU: the per-atom electrostatic
+    // potential must be copied back (F buffer ops off => CPU force reduction + the potential D2H)
+    // and the lambda-charges must be pushed every step (X buffer ops off => full x+q H2D). So
+    // buffer ops are disabled for lambda dynamics (which also runs with GPU update off).
     // x/f transform is done on GPU by default unless it is not unsupported (with MTS) or disabled (with the env. var.)
     simulationWorkload.useGpuXBufferOpsWhenAllowed =
             GpuConfigurationCapabilities::BufferOps && useGpuForNonbonded && !inputrec.useMts
-            && !(useReplicaExchange && !useGpuForUpdate) && !disableGpuBufferOps;
+            && !(useReplicaExchange && !useGpuForUpdate) && !disableGpuBufferOps
+            && !inputrec.lambda_dynamics;
     simulationWorkload.useGpuFBufferOpsWhenAllowed =
             GpuConfigurationCapabilities::BufferOps && useGpuForNonbonded && !inputrec.useMts
-            && !(useReplicaExchange && !useGpuForUpdate) && !disableGpuBufferOps;
+            && !(useReplicaExchange && !useGpuForUpdate) && !disableGpuBufferOps
+            && !inputrec.lambda_dynamics;
     if (featuresRequireGpuBufferOps)
     {
         GMX_RELEASE_ASSERT(simulationWorkload.useGpuXBufferOpsWhenAllowed

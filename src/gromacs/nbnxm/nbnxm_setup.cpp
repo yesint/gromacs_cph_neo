@@ -313,20 +313,16 @@ static NbnxmKernelSetup pick_nbnxn_kernel(const gmx::MDLogger&     mdlog,
 {
     NbnxmKernelSetup kernelSetup;
 
-    // Constant-pH (lambda dynamics) needs the per-atom electrostatic potential, which is only
-    // accumulated by the CPU non-bonded kernels (plain-C and SIMD). The GPU and GPU-emulation
-    // kernels do not compute it yet, so a GPU non-bonded run would silently produce
-    // dV/dlambda = 0 (lambdas never feel electrostatics). Fail fast until the GPU cph kernels
-    // land (see GPU_PORT_PLAN.md).
-    if (inputrec.lambda_dynamics
-        && (nonbondedResource == NonbondedResource::Gpu
-            || nonbondedResource == NonbondedResource::EmulateGpu))
+    // Constant-pH (lambda dynamics): the real GPU non-bonded kernel now accumulates the per-atom
+    // electrostatic potential (WP-G3), copied back on the classic buffer-ops path (forced for cph
+    // in the workload decision). The GPU-EMULATION kernel (plain-C 8x8x8) does not accumulate it,
+    // so keep that path fatal to avoid a silent dV/dlambda = 0.
+    if (inputrec.lambda_dynamics && nonbondedResource == NonbondedResource::EmulateGpu)
     {
         gmx_fatal(FARGS,
-                  "Constant pH (lambda dynamics) is only supported with CPU non-bonded kernels. "
-                  "The GPU non-bonded kernels do not compute the per-atom electrostatic potential "
-                  "that drives dV/dlambda, so a GPU run would silently give dV/dlambda = 0. "
-                  "Please run the non-bonded interactions on the CPU (mdrun -nb cpu).");
+                  "Constant pH (lambda dynamics) is not supported with GPU emulation. The emulation "
+                  "kernel does not compute the per-atom electrostatic potential that drives "
+                  "dV/dlambda. Use CPU non-bonded (mdrun -nb cpu) or a real GPU (mdrun -nb gpu).");
     }
 
     if (nonbondedResource == NonbondedResource::EmulateGpu)

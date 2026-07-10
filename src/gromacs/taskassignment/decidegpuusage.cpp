@@ -778,6 +778,9 @@ bool decideWhetherToUseGpuForUpdate(const bool           isDomainDecomposition,
     }
     errorReasons.appendIf((inputrec.eI != IntegrationAlgorithm::MD),
                           "Only the md integrator is supported.");
+    // Constant-pH runs the classic (non-resident) GPU path: the per-step potential D2H and
+    // lambda-charge H2D require GPU update to be off (GPU-resident update is a later work package).
+    errorReasons.appendIf(inputrec.lambda_dynamics, "Constant pH (lambda dynamics) is not supported.");
     errorReasons.appendIf((inputrec.etc == TemperatureCoupling::NoseHoover),
                           "Nose-Hoover temperature coupling is not supported.");
     errorReasons.appendIf((!(inputrec.pressureCouplingOptions.epc == PressureCoupling::No

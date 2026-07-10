@@ -1352,6 +1352,26 @@ void gmx::LegacySimulator::do_md()
                     fr_->nbv->reduceElectrostaticPotential(AtomLocality::Local,
                                                            fr_->electrostaticPotential);
                 }
+
+                /* On the GPU the NB kernel accumulates only the pairwise potential; the RF/Ewald
+                 * self-term (which the CPU kernels add in-kernel) is added here, host-side, per
+                 * home atom: V_a -= facel*q_a*2*Vc_sub_self, with 2*Vc_sub_self = c_rf for
+                 * reaction-field/cutoff and 2*beta/sqrt(pi) for Ewald/PME. Uses the current
+                 * (lambda-interpolated) charges set by setLambdaCharges before do_force. */
+                if (fr_->nbv->useGpu())
+                {
+                    const auto& coul  = fr_->ic->coulomb;
+                    const real  facel = coul.epsfac;
+                    const real  twoVcSubSelf =
+                            usingPmeOrEwald(coul.type)
+                                    ? real(2.0 * coul.ewaldCoeff / std::sqrt(M_PI))
+                                    : coul.reactionFieldShift;
+                    gmx::ArrayRef<const real> chargeA = md->chargeA;
+                    for (int a = 0; a < md->homenr; a++)
+                    {
+                        fr_->electrostaticPotential[a] -= facel * chargeA[a] * twoVcSubSelf;
+                    }
+                }
             }
 
             /* Constant-pH: update the lambda coordinates using the electrostatic
