@@ -633,6 +633,7 @@ NbnxmGpu* gpu_init(const DeviceStreamManager& deviceStreamManager,
     changePinningPolicy(&nb->nbst.fShift, PinningPolicy::PinnedIfSupported);
     changePinningPolicy(&nb->nbst.dvdlLJ, PinningPolicy::PinnedIfSupported);
     changePinningPolicy(&nb->nbst.dvdlElec, PinningPolicy::PinnedIfSupported);
+    changePinningPolicy(&nb->nbst.potential, PinningPolicy::PinnedIfSupported); // constant-pH
 
     nb->nbst.eLJ.resize(1);
     nb->nbst.eElec.resize(1);
@@ -1004,6 +1005,9 @@ void gpu_init_atomdata(NbnxmGpu* nb, const nbnxn_atomdata_t* nbat)
     int  numAtoms  = nbat->numAtoms();
     bool realloced = false;
 
+    /* Constant-pH: does the NB kernel need to accumulate the per-atom electrostatic potential? */
+    atdat->computePotential = nbat->computeElectrostaticPotential();
+
     if (bDoTime)
     {
         /* time async copy */
@@ -1050,6 +1054,12 @@ void gpu_init_atomdata(NbnxmGpu* nb, const nbnxn_atomdata_t* nbat)
         allocateDeviceBuffer(&atdat->f, numAlloc, deviceContext);
         allocateDeviceBuffer(&atdat->xq, numAlloc, deviceContext);
 
+        /* Constant-pH: per-atom electrostatic potential output, allocated like f. */
+        if (atdat->computePotential)
+        {
+            allocateDeviceBuffer(&atdat->potential, numAlloc, deviceContext);
+        }
+
         if (useLjCombRule(nb->nbparam->vdwType))
         {
             // Two Lennard-Jones parameters per atom
@@ -1080,10 +1090,20 @@ void gpu_init_atomdata(NbnxmGpu* nb, const nbnxn_atomdata_t* nbat)
     atdat->numAtoms      = numAtoms;
     atdat->numAtomsLocal = nbat->numLocalAtoms();
 
+    /* Constant-pH: host staging buffer for the per-atom potential D2H copy-back. */
+    if (atdat->computePotential)
+    {
+        nb->nbst.potential.resize(numAtoms);
+    }
+
     /* need to clear GPU f output if realloc happened */
     if (realloced)
     {
         clearDeviceBufferAsync(&atdat->f, 0, atdat->numAtomsAlloc, localStream);
+        if (atdat->computePotential)
+        {
+            clearDeviceBufferAsync(&atdat->potential, 0, atdat->numAtomsAlloc, localStream);
+        }
     }
 
     if (useLjCombRule(nb->nbparam->vdwType))
@@ -1189,6 +1209,11 @@ void gpu_clear_outputs(NbnxmGpu* nb, bool computeVirial)
     const DeviceStream& localStream = *nb->deviceStreams[InteractionLocality::Local];
     // Clear forces
     clearDeviceBufferAsync(&adat->f, 0, nb->atdat->numAtoms, localStream);
+    // Constant-pH: clear the per-atom electrostatic potential accumulator every step, like f
+    if (adat->computePotential)
+    {
+        clearDeviceBufferAsync(&adat->potential, 0, nb->atdat->numAtoms, localStream);
+    }
     // Clear shift force array and energies if the outputs were used in the current step
     if (computeVirial)
     {
@@ -1683,6 +1708,7 @@ void gpu_free(NbnxmGpu* nb)
     /* Free atdat */
     freeDeviceBuffer(&(nb->atdat->xq));
     freeDeviceBuffer(&(nb->atdat->f));
+    freeDeviceBuffer(&(nb->atdat->potential));
     freeDeviceBuffer(&(nb->atdat->eLJ));
     freeDeviceBuffer(&(nb->atdat->eElec));
     freeDeviceBuffer(&(nb->atdat->dvdlLJ));

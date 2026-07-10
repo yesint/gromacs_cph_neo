@@ -152,6 +152,9 @@ struct NBStagingData
     //! shift forces
     HostVector<Float3> fShift;
 
+    //! Constant-pH: per-atom electrostatic potential, staged from the device (size numAtoms)
+    HostVector<float> potential;
+
     //! foreign lambda terms
     HostVector<float> eLJForeign;
     HostVector<float> eElecForeign;
@@ -177,6 +180,12 @@ struct NBAtomDataGpu
     DeviceBuffer<Float4> q4;
     //! force output array, size \ref numAtoms
     DeviceBuffer<Float3> f;
+
+    //! Constant-pH: per-atom electrostatic potential output (size \ref numAtoms), the dV/dlambda
+    //! driver. Allocated/cleared/copied-back only when \ref computePotential (lambda dynamics).
+    DeviceBuffer<float> potential;
+    //! Constant-pH: whether the NB kernel accumulates the per-atom electrostatic potential
+    bool computePotential = false;
 
     //! LJ energy output, size 1
     DeviceBuffer<float> eLJ;
