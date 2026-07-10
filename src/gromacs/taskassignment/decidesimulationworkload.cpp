@@ -68,6 +68,7 @@
 #include "gromacs/taskassignment/taskassignment.h"
 #include "gromacs/topology/ifunc.h"
 #include "gromacs/utility/arrayref.h"
+#include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/logger.h"
 
@@ -124,6 +125,18 @@ SimulationWorkload createSimulationWorkload(const gmx::MDLogger& mdlog,
         GMX_RELEASE_ASSERT(!haveSeparatePmeRank, "Can not have separate PME rank(s) without PME.");
     }
     simulationWorkload.haveSeparatePmeRank = haveSeparatePmeRank;
+    /* Constant-pH: PME decomposed across the PP ranks is supported (the reciprocal potential is
+     * gathered per slab and redistributed back like the forces). Separate PME ranks are NOT: the
+     * reciprocal potential computed on the PME rank is not yet communicated back over the PME->PP
+     * link, so dV/dlambda would silently miss the reciprocal term. Fail fast instead. */
+    if (inputrec.lambda_dynamics && haveSeparatePmeRank)
+    {
+        gmx_fatal(FARGS,
+                  "Constant pH (lambda dynamics) does not support separate PME ranks yet. The "
+                  "reciprocal-space electrostatic potential that drives dV/dlambda is computed on "
+                  "the PME rank and is not sent back to the PP ranks. Run without separate PME "
+                  "ranks (e.g. mdrun -npme 0) so PME runs on the PP ranks, where it is supported.");
+    }
     simulationWorkload.useGpuPmePpCommunication =
             haveSeparatePmeRank && canUseDirectGpuComm
             && (pmeRunMode == PmeRunMode::GPU || pmeRunMode == PmeRunMode::Mixed);
