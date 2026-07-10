@@ -247,6 +247,7 @@ template<int order, int atomsPerWarp, bool wrapX, bool wrapY>
 __device__ __forceinline__ void sumForceComponents(float* __restrict__ fx,
                                                    float* __restrict__ fy,
                                                    float* __restrict__ fz,
+                                                   float* __restrict__ potential, // constant-pH
                                                    const int ithyMin,
                                                    const int ithyMax,
                                                    const int ixBase,
@@ -295,6 +296,9 @@ __device__ __forceinline__ void sumForceComponents(float* __restrict__ fx,
             *fx += tdx.y * tdy.x * fxy1;
             *fy += tdx.x * tdy.y * fxy1;
             *fz += tdx.x * tdy.x * fz1;
+            /* Constant-pH: reciprocal potential = theta_x*theta_y*theta_z*grid (all values, no
+             * derivative). fxy1 already = theta_z*grid, tdx.x=theta_x, tdy.x=theta_y. */
+            *potential += tdx.x * tdy.x * fxy1;
         }
     }
 }
@@ -582,6 +586,7 @@ __launch_bounds__(c_gatherMaxThreadsPerBlock, c_gatherMinBlocksPerMP) __global__
     float fx = 0.0F;
     float fy = 0.0F;
     float fz = 0.0F;
+    float potential = 0.0F; // constant-pH: per-thread partial reciprocal potential
 
     const int chargeCheck = pme_gpu_check_atom_charge(gm_coefficientsA[atomIndexGlobal]);
 
@@ -612,6 +617,7 @@ __launch_bounds__(c_gatherMaxThreadsPerBlock, c_gatherMinBlocksPerMP) __global__
         sumForceComponents<order, atomsPerWarp, wrapX, wrapY>(&fx,
                                                               &fy,
                                                               &fz,
+                                                              &potential,
                                                               ithyMin,
                                                               ithyMax,
                                                               ixBase,
@@ -633,6 +639,26 @@ __launch_bounds__(c_gatherMaxThreadsPerBlock, c_gatherMinBlocksPerMP) __global__
     reduce_atom_forces<order, atomDataSize, blockSize>(
             sm_forces, atomIndexLocal, splineIndex, lineIndex, kernelParams.grid.realGridSizeFP, fx, fy, fz);
     __syncthreads();
+
+    /* Constant-pH: reduce and write the per-atom reciprocal potential. Each atom's atomDataSize
+     * lanes hold partial sums (over their ithz/ithy slice); a down-shuffle over the aligned
+     * atomDataSize-lane group collapses them to lane 0 (splineIndex == 0), which stores the result.
+     * c_skipNeutralAtoms == false, so every atom — including titratable atoms that are neutral at
+     * the current lambda — has valid splines and a valid gathered potential. Only order==4 /
+     * numGrids==1 (the constant-pH regime) is handled; d_potentials is sized to nAtomsAlloc, so the
+     * atomIndexGlobal store is always in bounds (padding slots are written but never read). */
+    if constexpr (order == 4 && numGrids == 1)
+    {
+#pragma unroll
+        for (int delta = 1; delta < atomDataSize; delta <<= 1)
+        {
+            potential += __shfl_down_sync(c_fullWarpMask, potential, delta, atomDataSize);
+        }
+        if (splineIndex == 0)
+        {
+            kernelParams.atoms.d_potentials[atomIndexGlobal] = potential;
+        }
+    }
 
     /* Calculating the final forces with no component branching, atomsPerBlock threads */
     const int   forceIndexLocal  = threadLocalId;
@@ -669,6 +695,7 @@ __launch_bounds__(c_gatherMaxThreadsPerBlock, c_gatherMinBlocksPerMP) __global__
             sumForceComponents<order, atomsPerWarp, wrapX, wrapY>(&fx,
                                                                   &fy,
                                                                   &fz,
+                                                                  &potential, // numGrids==2: unused
                                                                   ithyMin,
                                                                   ithyMax,
                                                                   ixBase,
