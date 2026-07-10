@@ -633,7 +633,6 @@ NbnxmGpu* gpu_init(const DeviceStreamManager& deviceStreamManager,
     changePinningPolicy(&nb->nbst.fShift, PinningPolicy::PinnedIfSupported);
     changePinningPolicy(&nb->nbst.dvdlLJ, PinningPolicy::PinnedIfSupported);
     changePinningPolicy(&nb->nbst.dvdlElec, PinningPolicy::PinnedIfSupported);
-    changePinningPolicy(&nb->nbst.potential, PinningPolicy::PinnedIfSupported); // constant-pH
 
     nb->nbst.eLJ.resize(1);
     nb->nbst.eElec.resize(1);
@@ -1090,12 +1089,6 @@ void gpu_init_atomdata(NbnxmGpu* nb, const nbnxn_atomdata_t* nbat)
     atdat->numAtoms      = numAtoms;
     atdat->numAtomsLocal = nbat->numLocalAtoms();
 
-    /* Constant-pH: host staging buffer for the per-atom potential D2H copy-back. */
-    if (atdat->computePotential)
-    {
-        nb->nbst.potential.resize(numAtoms);
-    }
-
     /* need to clear GPU f output if realloc happened */
     if (realloced)
     {
@@ -1347,6 +1340,22 @@ void gpu_launch_cpyback(NbnxmGpu*                nb,
                 bDoTime ? timers->xf[atomLocality].nb_d2h.fetchNextEvent() : nullptr);
 
         issueClFlushInStream(deviceStream);
+
+        /* Constant-pH: DtoH the per-atom electrostatic potential into the nbat host output
+         * buffer (nbat order), so it is reduced to atom order by the same
+         * reduceElectrostaticPotential() path as the CPU kernels. Rides the same classic-path
+         * (!useGpuFBufferOps) local-stream sync as the force copy-back. */
+        if (adat->computePotential)
+        {
+            copyFromDeviceBuffer(nbatom->outputBuffer(0).potential.data() + atomsRange.begin(),
+                                 &adat->potential,
+                                 atomsRange.begin(),
+                                 atomsRange.size(),
+                                 deviceStream,
+                                 GpuApiCallBehavior::Async,
+                                 nullptr);
+            issueClFlushInStream(deviceStream);
+        }
     }
 
     /* After the non-local D2H is launched the nonlocal_done event can be

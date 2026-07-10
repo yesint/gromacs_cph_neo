@@ -152,9 +152,6 @@ struct NBStagingData
     //! shift forces
     HostVector<Float3> fShift;
 
-    //! Constant-pH: per-atom electrostatic potential, staged from the device (size numAtoms)
-    HostVector<float> potential;
-
     //! foreign lambda terms
     HostVector<float> eLJForeign;
     HostVector<float> eElecForeign;
