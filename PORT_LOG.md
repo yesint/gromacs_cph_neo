@@ -246,3 +246,29 @@ PP ranks** (the default when no separate PME ranks are used):
   `-ntmpi 4` runs, `-ntmpi 4 -npme 1` fails cleanly. Implementing separate-PME-rank support = a later
   WP (send the potential in `gmx_pme_send_force_vir_ener` / receive in `gmx_pme_receive_f`; sub-cases
   for npme=1 vs >1 and the GPU PME-PP comm). Not needed for the campaign or typical DD runs.
+
+### ✅ L1.2 DONE — CUDA PME reciprocal potential on GPU (2026-07-10, commit a220ca6)
+The GPU PME gather kernel now produces the per-atom reciprocal potential (the last missing piece of
+"CUDA PME"). Host plumbing landed earlier (commit d88f48c): `d_potentials` device buffer +
+`h_potentials` pinned staging (sized `nAtomsAlloc`, realloc'd with the forces), copy-back gated on
+`PmeGpuSettings::computeElectrostaticPotential` (= `pme->computePotential` = `ir->lambda_dynamics`),
+`PmeOutput::potentials_`, and `pme_gpu_reduce_outputs` accumulating into `fr->electrostaticPotential`.
+- **Kernel (`pme_gather.cu`):** `sumForceComponents` gained a `float* potential` out-param and
+  accumulates `theta_x*theta_y*theta_z*grid` (values only, no derivative — `*potential += tdx.x*tdy.x*fxy1`
+  where `fxy1 = theta_z*grid`) in the same inner loop as the force. After the force reduction, the
+  per-atom partials are collapsed over the atom's `atomDataSize` lanes with a `__shfl_down_sync`
+  (width `atomDataSize`), and lane 0 (`splineIndex==0`) stores to `d_potentials[atomIndexGlobal]`.
+  Gated `if constexpr (order == 4 && numGrids == 1)` = the constant-pH regime; `d_potentials` is sized
+  to `nAtomsAlloc`, so the store is always in bounds (padding slots written, never read).
+- **No uncharged-atom special-case needed on GPU.** `c_skipNeutralAtoms == false` (pme_gpu_constants.h),
+  so `pme_gpu_check_atom_charge` returns true for every atom → splines are computed and the potential is
+  gathered for **all** atoms, including titratable atoms that are electrically neutral at the current λ
+  (HIS at λ=1, BUF at λ=0.5). The L0.1 CPU concern (`make_bsplines` skipping zero-charge atoms, fixed
+  there with `bDoSplines |= !potentials.empty()`) does **not** recur on the GPU.
+- **Validated** (`pmegpu_run/`, RTX 3080, `-nsteps 0`, `GMX_CPH_DUMP_DVDL=1`), full-GPU
+  (`-nb gpu -pme gpu`) single-point dV/dλ vs the CPU oracle (`-nb cpu -pme cpu`):
+  - 46-group HIS/BUF system: max rel **2.0e-5**, median 1.2e-6, p90 4.2e-6 (0 groups > 5e-5).
+  - 88k all-atom CHARMM36: max rel **6.2e-5** (group 54, dV/dλ≈1125 → 0.07 abs), median 2.1e-6 (1/54 > 5e-5).
+  - The mixed control (`-nb gpu -pme cpu`) stays at 1.6e-5 on both (= the already-validated L1.1 NB
+    level); the L1.2-isolated delta (gpuPME vs cpuPME) matches the full-GPU-vs-oracle error and tracks
+    group magnitude ⇒ pure single-precision cuFFT/gather floor, not a bug. **CUDA PME is finalized.**

@@ -138,42 +138,27 @@ Layer 0 alone upgrades the port from "RF single-rank" to "general CPU cph." It i
   single-point dV/dλ on the RF 46-group system matches the CPU oracle to max rel **2.3e-6** → the
   device force path is correct, **GO**. Build with `GMX_SIMD=AVX2_256` (portable across the cluster's
   Zen3 GPU nodes). TODO perf: warp-shuffle reduction to replace per-pair `atomicAdd`.
-- **L1.2 PME reciprocal potential on GPU — 🚧 IN PROGRESS (scaffolding started).** Port the fork's GPU
-  PME potential gather (order 4, 4 threads/atom) to 2026's PME. Exact steps (fork = reference):
-  - ✅ started: `d_potentials` in `PmeGpuAtomParams` (pme_gpu_types.h); `h_potentials` (padded) in
-    `PmeGpuStaging` (pme_gpu_staging.h).
-  - TODO buffers: `potentialsSize/SizeAlloc` in `PmeGpu::archSpecific`; realloc `d_potentials` +
-    `resizeWithPadding(h_potentials)` in `pme_gpu_realloc_forces`; free in `pme_gpu_free_forces`; D2H
-    `d_potentials→h_potentials` in `pme_gpu_copy_output_forces`; pin `h_potentials` in the init.
-  - ✅ host plumbing DONE + compiles (commit d88f48c): buffers/staging/copy-back, the
-    computePotential flag chain (gmx_pme_t→PmeGpuSettings), PmeOutput.potentials_, getOutput,
-    pme_gpu_reduce_outputs + the try_finish_task/wait_and_reduce/sim_util wiring (both wait paths pass
-    fr->electrostaticPotential when constantPH).
-  - 🚧 TODO kernel (`pme_gather.cu`, the remaining crux):
-    (1) `sumForceComponents` — add a `float* potential` out param, accumulate `*potential +=
-        tdx.x*tdy.x*fxy1` (all-theta, no derivative) in the inner loop; update its one caller (~L612).
-    (2) In the gather kernel, after `reduce_atom_forces`, add a SEPARATE warp reduction of the potential
-        over the atom's `atomDataSize` lanes (`for (delta=atomDataSize/2; delta>=1; delta>>=1) potential
-        += __shfl_down_sync(mask, potential, delta, atomDataSize)`), then the `splineIndex==0` lane writes
-        `gm_potentials[atomIndexGlobal]` (= `kernelParams.atoms.d_potentials`). Simpler + lower-risk than
-        reworking the fused fx/fy/fz shuffle (the fork's approach). Gate on a runtime
-        `kernelParams` flag (add `bool computeElectrostaticPotential`, set at launch from
-        settings) + `if constexpr(order==4)`; non-cph pays only the sumForceComponents FMA.
-    (3) **‼️ chargeCheck/uncharged-atom subtlety (the L0.1 bug, GPU edition):** `sumForceComponents` is
-        inside `if (chargeCheck)`, and splines may be skipped for zero-charge atoms — but a titratable
-        atom that is NEUTRAL at the current λ (HIS at λ=1, BUF at λ=0.5) still needs its reciprocal
-        potential (its charge-difference is non-zero). Must ensure splines are computed AND the potential
-        is gathered for uncharged atoms (GPU analogue of the L0.1 `bDoSplines |= !potentials.empty()`
-        fix). Verify on the M0a HIS/BUF groups specifically — they were exactly the ones that broke on CPU.
-    Replicate to sycl/hip/opencl gather later.
-  - TODO output+wiring: `pme_gpu_getOutput` sets `output.potentials_ = staging.h_potentials`;
-    `pme_gpu_reduce_outputs`/`pme_gpu_wait_and_reduce` add `potentials_` into an
-    `electrostaticPotential` arg (as the fork's `pme_gpu.cpp` does); thread `fr->electrostaticPotential`
-    from the caller (sim_util/force path) into the GPU-PME reduce — the GPU analogue of the L0.1
-    `gmx_pme_do(..., potentials)` wiring. Then it combines with the L1.1 real-space potential in the
-    same `fr->electrostaticPotential`.
-  - **Validate:** PME on GPU (`-pme gpu`) M1-GPU-style vs CPU oracle on the 46-group + 88k all-atom
-    systems (`bigpme_run/big2.tpr`). cuFFT (no CPU-FFTW node/SIMD issue).
+- **L1.2 PME reciprocal potential on GPU — ✅ DONE (2026-07-10, commits d88f48c host + a220ca6 kernel).**
+  The CUDA gather kernel produces the per-atom reciprocal potential; `-pme gpu` cph now works.
+  - Host plumbing (d88f48c): `d_potentials` (`PmeGpuAtomParams`) + `h_potentials` pinned staging
+    (`PmeGpuStaging`), `potentialsSize/SizeAlloc` in `archSpecific`, realloc/free/copy-back in
+    pme_gpu_internal.cpp (D2H gated on `PmeGpuSettings::computeElectrostaticPotential`
+    = `pme->computePotential` = `ir->lambda_dynamics`), `PmeOutput::potentials_`, getOutput,
+    `pme_gpu_reduce_outputs`/`wait_and_reduce` accumulate into the `electrostaticPotential` arg,
+    sim_util passes `fr->electrostaticPotential` when constantPH (combines with the L1.1 real-space part).
+  - Kernel (a220ca6, `pme_gather.cu`): `sumForceComponents` gained a `float* potential` out-param
+    (`*potential += tdx.x*tdy.x*fxy1`, all-theta no-derivative); after `reduce_atom_forces` a separate
+    `__shfl_down_sync` reduction over the atom's `atomDataSize` lanes, lane 0 (`splineIndex==0`) writes
+    `d_potentials[atomIndexGlobal]`. Gated `if constexpr (order==4 && numGrids==1)`. **Deviation from
+    the plan:** no runtime `kernelParams` flag was added — the kernel always writes `d_potentials`
+    (sized `nAtomsAlloc`, cheap), and the *copy-back* is what's gated on the settings flag; simpler and
+    the non-cph cost is one extra shuffle+store per order-4 gather.
+  - **chargeCheck/uncharged-atom subtlety = NON-ISSUE on GPU.** `c_skipNeutralAtoms == false`
+    (pme_gpu_constants.h) ⇒ `pme_gpu_check_atom_charge` is always true ⇒ splines + gather run for every
+    atom, including titratable atoms neutral at the current λ. The L0.1 CPU fix has no GPU analogue.
+  - **Validated** (`pmegpu_run/`): full-GPU vs CPU-oracle single-point dV/dλ — 46-group HIS/BUF max
+    2.0e-5 (median 1.2e-6); 88k all-atom max 6.2e-5 (median 2.1e-6, worst group = the ≈1125-magnitude
+    one). = single-precision cuFFT/gather floor. Replicate to sycl/hip/opencl gather later.
 - **L1.3 Classic-path GPU cph (1d).** Force buffer-ops OFF; per-step full x+q H2D, potential D2H, host
   λ integration (unchanged). Flip the `nbnxm_setup.cpp:321` hard-fatal to allow `-nb gpu`.
   **Gate M1-GPU (GO/NO-GO):** single-point dV/dλ, GPU vs the PME oracle, ≤ ~1e-3 (single precision +
