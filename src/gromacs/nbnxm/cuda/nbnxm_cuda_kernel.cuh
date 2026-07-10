@@ -175,6 +175,10 @@ __launch_bounds__(THREADS_PER_BLOCK, MIN_BLOCKS_PER_MP)
 #    endif
     const float4* xq          = atdat.xq;
     float3*       f           = asFloat3(atdat.f);
+    /* Constant-pH: per-atom electrostatic potential accumulator (dV/dlambda driver).
+     * Gated on a per-launch flag so non-cph runs pay only a uniform branch. */
+    float*        potential    = atdat.potential;
+    const bool    doPotential  = atdat.computePotential;
     const float3* shift_vec   = asFloat3(atdat.shiftVec);
     float         rcoulomb_sq = nbparam.rcoulomb_sq;
 #    ifdef VDW_CUTOFF_CHECK
@@ -669,6 +673,34 @@ __launch_bounds__(THREADS_PER_BLOCK, MIN_BLOCKS_PER_MP)
 
                                 /* accumulate i forces in registers */
                                 fci_buf[i] += f_ij;
+
+#    ifdef HAVE_ELECTROSTATICS
+                                /* Constant-pH: accumulate the per-atom electrostatic potential
+                                 * V_a = sum_b facel*q_b*coulFunc(a,b). coulFunc is the same
+                                 * per-pair Coulomb value used for E_el (int_bit handles exclusion
+                                 * corrections). qi = epsfac*q_i (shared, scaled), qj_f = q_j (raw),
+                                 * so V_i += facel*q_j*coulFunc = epsfac*qj_f*coulFunc and
+                                 * V_j += facel*q_i*coulFunc = qi*coulFunc. The RF/Ewald self-term is
+                                 * added on the host. Correctness-first: per-pair atomicAdd (a
+                                 * register-reduction optimisation can follow). */
+                                if (doPotential)
+                                {
+                                    float coulFunc = 0.0F;
+#        ifdef EL_CUTOFF
+                                    coulFunc = int_bit * inv_r - nbparam.c_rf;
+#        endif
+#        ifdef EL_RF
+                                    coulFunc = int_bit * inv_r + 0.5F * two_k_rf * r2 - nbparam.c_rf;
+#        endif
+#        ifdef EL_EWALD_ANY
+                                    coulFunc = inv_r * (int_bit - erff(r2 * inv_r * nbparam.ewald_beta))
+                                               - int_bit * nbparam.sh_ewald;
+#        endif
+                                    const int aiPot = ci * c_clusterSize + tidxi;
+                                    atomicAdd(&potential[aiPot], nbparam.epsfac * qj_f * coulFunc);
+                                    atomicAdd(&potential[aj], qi * coulFunc);
+                                }
+#    endif /* HAVE_ELECTROSTATICS */
                             }
                         }
 
