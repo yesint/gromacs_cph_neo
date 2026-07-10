@@ -185,8 +185,8 @@ DD cph was broken in **three** independent ways (RF, 4 thread-MPI ranks vs 1 ran
 all fixed. RF DD now reproduces single-rank dV/dλ to the single-precision floor for 2/4/8 ranks and
 4 ranks × 2 threads (max rel 3e-6), a 30-step run with `nstlist=10` repartitioning matches
 single-rank over the whole trajectory, and single-rank M0a is unregressed. Repro:
-`full_size/cph/m0b_repro.sh`. **DD+PME is still unsupported** (the reciprocal potential would need
-PME-decomposition / separate-PME-rank communication — asserts; deferred with §4). The three causes:
+`full_size/cph/m0b_repro.sh`. **DD+PME: see L0.2b below (now solved for PME on the PP ranks).**
+The three causes:
 
 1. **Cross-domain group-potential reduce (commit 34dc38b).** A λ group's *atoms* can live on different
    ranks; each rank must sum its home atoms' Σφ·Δq and all-reduce. `ConstantPH` was built with a
@@ -222,3 +222,27 @@ PME-decomposition / separate-PME-rank communication — asserts; deferred with �
 Diagnosis lesson: bugs 2 and 3 both had to be fixed together — the halo move alone left an over/under
 residual (the double-counted halo copies), and `findHome` alone left an under-count (incomplete
 home-atom potential). Each masked the other in single-fix tests.
+
+### ✅ L0.2b DONE — DD + PME (2026-07-10, commits 383ec0c + 094e449)
+The L0.1 PME potential asserted `pme->nnodes == 1`. Now DD+PME works with **PME decomposed across the
+PP ranks** (the default when no separate PME ranks are used):
+- The reciprocal potential is gathered on each PME slab in slab-atom order (`atc.potentials`, new
+  `FastVector<real>` on `PmeAtomComm`, allocated in `setNumAtoms`) and **redistributed back to PP
+  order exactly like the forces** — `dd_pmeredist_potential()` is the scalar analogue of
+  `dd_pmeredist_f` (reuses `pme->bufr`, already sized by the forward coefficient redistribution), and
+  it's called in the same redistribute-back loop, cascading through the decomposition dims. This is
+  cleaner than the fork's bespoke `PotentialsComm`/`potentialAtomsBuffer` (which communicated only the
+  λ subset via a separate atom-index comm) — the potential just rides the existing force-redist
+  structure for all atoms.
+- **md.cpp NB halo move made PME-safe:** home atoms already hold the reciprocal part after do_force,
+  and `dd_move_f` uses home slots as forwarding scratch, so the home slots are zeroed at the move (PME
+  neither forwarded nor overwritten) and the received halo NB contribution is **added** afterward.
+- **Validated:** DD+PME 1-vs-{2,4} ranks single-point matches single-rank to the single-precision/FFT
+  floor (median rel 4e-7; the worst-case rel ~3e-5 is the cphmd xvg print granularity on small groups,
+  not error); 20-step DD+PME matches single-rank; M0a + M0b unregressed. Same grid on all rank counts.
+- **Separate PME ranks (`-npme > 0`) are guarded, not silently wrong:** the reciprocal potential is
+  computed on the PME rank and not yet returned over the PME→PP link, so `createSimulationWorkload`
+  `gmx_fatal`s on `lambda_dynamics + haveSeparatePmeRank` (message: run PME on the PP ranks). Verified:
+  `-ntmpi 4` runs, `-ntmpi 4 -npme 1` fails cleanly. Implementing separate-PME-rank support = a later
+  WP (send the potential in `gmx_pme_send_force_vir_ener` / receive in `gmx_pme_receive_f`; sub-cases
+  for npme=1 vs >1 and the GPU PME-PP comm). Not needed for the campaign or typical DD runs.

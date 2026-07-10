@@ -117,7 +117,13 @@ local GPU, so all GPU build/test is on aurum2.
   forwarding scratch during the move). Bugs 2+3 are new work (the 2021 fork does neither; correct only
   single-rank). **M0b:** RF DD 1-vs-{2,4,8} ranks and 4×2 threads match to rel 3e-6; 30-step run with
   repartitioning matches single-rank; single-rank M0a unregressed. Repro: `full_size/cph/m0b_repro.sh`.
-  **DD+PME still deferred** (reciprocal potential needs PME-decomposition/separate-PME-rank comm — §4).
+- **L0.2b DD+PME — DONE (commits 383ec0c + 094e449).** PME decomposed across the PP ranks (the default)
+  works: reciprocal potential gathered per slab and redistributed back to PP order like the forces
+  (`dd_pmeredist_potential`, scalar analogue of `dd_pmeredist_f`; new `atc.potentials`); md.cpp NB halo
+  move made PME-safe (home slots zeroed at the move, received NB added after). Validated 1-vs-{2,4}
+  ranks + 20-step vs single-rank. Separate PME ranks (`-npme`) are guarded (`gmx_fatal`) — returning the
+  reciprocal potential over the PME->PP link is a later WP. General-purpose DD+PME on the PP ranks is
+  solved; only dedicated-PME-rank scale-out remains.
 
 Layer 0 alone upgrades the port from "RF single-rank" to "general CPU cph." It is a prerequisite for
 *any* large-system use and is independent of the GPU decision.
