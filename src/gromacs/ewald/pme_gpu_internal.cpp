@@ -254,11 +254,22 @@ void pme_gpu_realloc_forces(PmeGpu* pmeGpu)
 
     pmeGpu->staging.h_forces.reserveWithPadding(pmeGpu->nAtomsAlloc);
     pmeGpu->staging.h_forces.resizeWithPadding(pmeGpu->kernelParams->atoms.nAtoms);
+
+    /* Constant-pH: per-atom reciprocal-space potential output (one float per atom), allocated and
+     * staged like the forces. Small (1 float/atom); reallocated only at DD. */
+    reallocateDeviceBuffer(&pmeGpu->kernelParams->atoms.d_potentials,
+                           pmeGpu->nAtomsAlloc,
+                           &pmeGpu->archSpecific->potentialsSize,
+                           &pmeGpu->archSpecific->potentialsSizeAlloc,
+                           pmeGpu->archSpecific->deviceContext_);
+    pmeGpu->staging.h_potentials.reserveWithPadding(pmeGpu->nAtomsAlloc);
+    pmeGpu->staging.h_potentials.resizeWithPadding(pmeGpu->kernelParams->atoms.nAtoms);
 }
 
 void pme_gpu_free_forces(const PmeGpu* pmeGpu)
 {
     freeDeviceBuffer(&pmeGpu->kernelParams->atoms.d_forces);
+    freeDeviceBuffer(&pmeGpu->kernelParams->atoms.d_potentials); // constant-pH
 }
 
 void pme_gpu_copy_input_forces(PmeGpu* pmeGpu)
@@ -283,6 +294,17 @@ void pme_gpu_copy_output_forces(PmeGpu* pmeGpu)
                          pmeGpu->archSpecific->pmeStream_,
                          pmeGpu->settings.transferKind,
                          nullptr);
+    /* Constant-pH: also stage the per-atom reciprocal potential the gather kernel wrote. */
+    if (pmeGpu->settings.computeElectrostaticPotential)
+    {
+        copyFromDeviceBuffer(pmeGpu->staging.h_potentials.data(),
+                             &pmeGpu->kernelParams->atoms.d_potentials,
+                             0,
+                             pmeGpu->kernelParams->atoms.nAtoms,
+                             pmeGpu->archSpecific->pmeStream_,
+                             pmeGpu->settings.transferKind,
+                             nullptr);
+    }
 }
 
 void pme_gpu_realloc_and_copy_input_coefficients(const PmeGpu* pmeGpu,
@@ -1152,6 +1174,11 @@ static void pme_gpu_getForceOutput(PmeGpu* pmeGpu, PmeOutput* output)
     {
         output->forces_ = pmeGpu->staging.h_forces;
     }
+    /* Constant-pH: surface the per-atom reciprocal potential staged by the gather copy-back. */
+    if (pmeGpu->settings.computeElectrostaticPotential)
+    {
+        output->potentials_ = pmeGpu->staging.h_potentials;
+    }
 }
 
 PmeOutput pme_gpu_getOutput(gmx_pme_t* pme, const bool computeEnergyAndVirial, const real lambdaQ)
@@ -1384,7 +1411,10 @@ static void pme_gpu_init(gmx_pme_t*           pme,
     pme->gpu       = new PmeGpu();
     PmeGpu* pmeGpu = pme->gpu;
     changePinningPolicy(&pmeGpu->staging.h_forces, pme_get_pinning_policy());
+    changePinningPolicy(&pmeGpu->staging.h_potentials, pme_get_pinning_policy()); // constant-pH
     pmeGpu->common = std::make_shared<PmeShared>();
+    /* Constant-pH: does this run need the per-atom reciprocal-space potential (dV/dlambda)? */
+    pmeGpu->settings.computeElectrostaticPotential = pme->computePotential;
 
     /* These settings are set here for the whole run; dynamic ones are set in pme_gpu_reinit() */
     /* A convenience variable. */

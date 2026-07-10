@@ -780,6 +780,7 @@ gmx_pme_t* gmx_pme_init(const gmx_domdec_t*              dd,
      * configures with free-energy, but that has never been tested.
      */
     pme->doCoulomb = usingPme(ir->coulombtype);
+    pme->computePotential = ir->lambda_dynamics; // constant-pH: gather the reciprocal potential
     pme->doLJ      = usingLJPme(ir->vdwtype);
     pme->bFEP_q    = ((ir->efep != FreeEnergyPerturbationType::No) && bFreeEnergy_q);
     pme->bFEP_lj   = ((ir->efep != FreeEnergyPerturbationType::No) && bFreeEnergy_lj);

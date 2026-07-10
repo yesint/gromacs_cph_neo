@@ -171,6 +171,10 @@ struct PmeGpuSpecific
     int forcesSize = 0;
     /*! \brief The kernelParams.atoms.forces float element count (reserved) */
     int forcesSizeAlloc = 0;
+    /*! \brief Constant-pH: the kernelParams.atoms.d_potentials element count (actual) */
+    int potentialsSize = 0;
+    /*! \brief Constant-pH: the kernelParams.atoms.d_potentials element count (reserved) */
+    int potentialsSizeAlloc = 0;
     /*! \brief The kernelParams.atoms.gridlineIndices int element count (actual) */
     int gridlineIndicesSize = 0;
     /*! \brief The kernelParams.atoms.gridlineIndices int element count (reserved) */

@@ -386,6 +386,7 @@ struct gmx_pme_t
     bool bPPnode;   /* Node also does particle-particle forces */
     bool doCoulomb; /* Apply PME to electrostatics */
     bool doLJ;      /* Apply PME to Lennard-Jones r^-6 interactions */
+    bool computePotential = false; /* Constant-pH: gather the per-atom reciprocal potential (dV/dlambda) */
     bool bFEP;      /* Compute Free energy contribution */
     bool bFEP_q;
     bool bFEP_lj;

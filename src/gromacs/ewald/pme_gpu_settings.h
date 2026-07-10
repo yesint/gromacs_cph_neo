@@ -55,6 +55,8 @@ enum class ThreadsPerAtom : int;
 struct PmeGpuSettings
 {
     /* Permanent settings set on initialization */
+    /*! \brief Constant-pH: whether the gather computes the per-atom reciprocal potential (dV/dlambda) */
+    bool computeElectrostaticPotential = false;
     /*! \brief A boolean which tells if the solving is performed on GPU. Currently always true */
     bool performGPUSolve;
     /*! \brief A boolean which tells if the gathering is performed on GPU. Currently always true */

@@ -54,6 +54,8 @@ struct PmeOutput
 {
     //!< Host staging area for PME forces
     gmx::ArrayRef<gmx::RVec> forces_;
+    //!< Constant-pH: host staging area for the per-atom reciprocal-space potential (dV/dlambda)
+    gmx::ArrayRef<float> potentials_;
     //!< True if forces have been staged other false (when forces are reduced on the GPU).
     bool haveForceOutput_ = false;
     //!< Host staging area for PME coulomb energy

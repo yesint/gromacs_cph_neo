@@ -283,7 +283,8 @@ static void pme_gpu_reduce_outputs(const bool            computeEnergyAndVirial,
                                    const PmeOutput&      output,
                                    gmx_wallcycle*        wcycle,
                                    gmx::ForceWithVirial* forceWithVirial,
-                                   gmx_enerdata_t*       enerd)
+                                   gmx_enerdata_t*       enerd,
+                                   gmx::ArrayRef<real>   electrostaticPotential)
 {
     wallcycle_start(wcycle, WallCycleCounter::PmeGpuFReduction);
     GMX_ASSERT(forceWithVirial, "Invalid force pointer");
@@ -299,6 +300,15 @@ static void pme_gpu_reduce_outputs(const bool            computeEnergyAndVirial,
     {
         sum_forces(forceWithVirial->force_, output.forces_);
     }
+    /* Constant-pH: add the per-atom reciprocal-space potential to the caller's buffer. */
+    if (!electrostaticPotential.empty() && !output.potentials_.empty())
+    {
+        const int n = std::min(gmx::ssize(electrostaticPotential), gmx::ssize(output.potentials_));
+        for (int i = 0; i < n; i++)
+        {
+            electrostaticPotential[i] += output.potentials_[i];
+        }
+    }
     wallcycle_stop(wcycle, WallCycleCounter::PmeGpuFReduction);
 }
 
@@ -308,7 +318,8 @@ bool pme_gpu_try_finish_task(gmx_pme_t*               pme,
                              gmx::ForceWithVirial*    forceWithVirial,
                              gmx_enerdata_t*          enerd,
                              const real               lambdaQ,
-                             GpuTaskCompletion        completionKind)
+                             GpuTaskCompletion        completionKind,
+                             gmx::ArrayRef<real>      electrostaticPotential)
 {
     GMX_ASSERT(pme_gpu_active(pme), "This should be a GPU run of PME but it is not enabled.");
     GMX_ASSERT(!pme->gpu->settings.useGpuForceReduction,
@@ -353,7 +364,7 @@ bool pme_gpu_try_finish_task(gmx_pme_t*               pme,
 
     GMX_ASSERT(pme->gpu->settings.useGpuForceReduction == !output.haveForceOutput_,
                "When forces are reduced on the CPU, there needs to be force output");
-    pme_gpu_reduce_outputs(computeEnergyAndVirial, output, wcycle, forceWithVirial, enerd);
+    pme_gpu_reduce_outputs(computeEnergyAndVirial, output, wcycle, forceWithVirial, enerd, electrostaticPotential);
 
     return true;
 }
@@ -388,7 +399,8 @@ void pme_gpu_wait_and_reduce(gmx_pme_t*               pme,
                              gmx_wallcycle*           wcycle,
                              gmx::ForceWithVirial*    forceWithVirial,
                              gmx_enerdata_t*          enerd,
-                             const real               lambdaQ)
+                             const real               lambdaQ,
+                             gmx::ArrayRef<real>      electrostaticPotential)
 {
     // There's no support for computing energy without virial, or vice versa
     const bool computeEnergyAndVirial = stepWork.computeEnergy || stepWork.computeVirial;
@@ -396,7 +408,7 @@ void pme_gpu_wait_and_reduce(gmx_pme_t*               pme,
             pme, computeEnergyAndVirial, pme->gpu->common->ngrids > 1 ? lambdaQ : 1.0, wcycle);
     GMX_ASSERT(pme->gpu->settings.useGpuForceReduction == !output.haveForceOutput_,
                "When forces are reduced on the CPU, there needs to be force output");
-    pme_gpu_reduce_outputs(computeEnergyAndVirial, output, wcycle, forceWithVirial, enerd);
+    pme_gpu_reduce_outputs(computeEnergyAndVirial, output, wcycle, forceWithVirial, enerd, electrostaticPotential);
 }
 
 void pme_gpu_finish_step(const gmx_pme_t* pme, const bool gpuGraphWithSeparatePmeRank, gmx_wallcycle* wcycle)

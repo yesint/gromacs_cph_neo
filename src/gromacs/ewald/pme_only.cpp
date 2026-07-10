@@ -838,7 +838,7 @@ int gmx_pmeonly(struct gmx_pme_t**              pmeFromRunnerPtr,
         // of pme_pp (maybe box, energy and virial, too; and likewise
         // from mdatoms for the other call to gmx_pme_do), so we have
         // fewer lines of code and less parameter passing.
-        PmeOutput output = { {}, false, 0, { { 0 } }, 0, 0, 0, { { 0 } } };
+        PmeOutput output = { {}, {}, false, 0, { { 0 } }, 0, 0, 0, { { 0 } } };
         if (useGpuForPme)
         {
             if (!pme_pp->useGpuPmePpCommunication)

@@ -799,11 +799,12 @@ static void pmeGpuWaitAndReduce(gmx_pme_t*          pme,
                                 gmx_wallcycle*      wcycle,
                                 ForceWithVirial*    forceWithVirial,
                                 gmx_enerdata_t*     enerd,
-                                const real          lambdaQ)
+                                const real          lambdaQ,
+                                gmx::ArrayRef<real> electrostaticPotential = gmx::ArrayRef<real>())
 {
     wallcycle_start_nocount(wcycle, WallCycleCounter::PmeGpuMesh);
 
-    pme_gpu_wait_and_reduce(pme, stepWork, wcycle, forceWithVirial, enerd, lambdaQ);
+    pme_gpu_wait_and_reduce(pme, stepWork, wcycle, forceWithVirial, enerd, lambdaQ, electrostaticPotential);
 
     wallcycle_stop(wcycle, WallCycleCounter::PmeGpuMesh);
 }
@@ -835,7 +836,8 @@ static void alternatePmeNbGpuWaitReduce(nonbonded_verlet_t*       nbv,
                                         const real                lambdaQ,
                                         const StepWorkload&       stepWork,
                                         const SimulationWorkload& simulationWork,
-                                        gmx_wallcycle*            wcycle)
+                                        gmx_wallcycle*            wcycle,
+                                        gmx::ArrayRef<real>       electrostaticPotential = gmx::ArrayRef<real>())
 {
     bool isPmeGpuDone = false;
     bool isNbGpuDone  = false;
@@ -847,8 +849,14 @@ static void alternatePmeNbGpuWaitReduce(nonbonded_verlet_t*       nbv,
             wallcycle_start_nocount(wcycle, WallCycleCounter::PmeGpuMesh);
             GpuTaskCompletion completionType =
                     (isNbGpuDone) ? GpuTaskCompletion::Wait : GpuTaskCompletion::Check;
-            isPmeGpuDone = pme_gpu_try_finish_task(
-                    pmedata, stepWork, wcycle, &forceOutputsPme->forceWithVirial(), enerd, lambdaQ, completionType);
+            isPmeGpuDone = pme_gpu_try_finish_task(pmedata,
+                                                   stepWork,
+                                                   wcycle,
+                                                   &forceOutputsPme->forceWithVirial(),
+                                                   enerd,
+                                                   lambdaQ,
+                                                   completionType,
+                                                   electrostaticPotential);
             wallcycle_stop(wcycle, WallCycleCounter::PmeGpuMesh);
         }
 
@@ -2288,7 +2296,8 @@ void do_force(FILE*                         fplog,
                                 wcycle,
                                 &forceOutMtsLevel1->forceWithVirial(),
                                 enerd,
-                                lambda[static_cast<int>(FreeEnergyPerturbationCouplingType::Coul)]);
+                                lambda[static_cast<int>(FreeEnergyPerturbationCouplingType::Coul)],
+                                fr->constantPH ? fr->electrostaticPotential : gmx::ArrayRef<real>());
         }
         else if (needToReceivePmeResultsFromSeparateRank)
         {
@@ -2497,7 +2506,8 @@ void do_force(FILE*                         fplog,
                                     lambda[static_cast<int>(FreeEnergyPerturbationCouplingType::Coul)],
                                     stepWork,
                                     simulationWork,
-                                    wcycle);
+                                    wcycle,
+                                    fr->constantPH ? fr->electrostaticPotential : gmx::ArrayRef<real>());
     }
 
     if (!alternateGpuWait && stepWork.haveGpuPmeOnThisRank && !needEarlyPmeResults)
@@ -2507,7 +2517,8 @@ void do_force(FILE*                         fplog,
                             wcycle,
                             &forceOutMtsLevel1->forceWithVirial(),
                             enerd,
-                            lambda[static_cast<int>(FreeEnergyPerturbationCouplingType::Coul)]);
+                            lambda[static_cast<int>(FreeEnergyPerturbationCouplingType::Coul)],
+                            fr->constantPH ? fr->electrostaticPotential : gmx::ArrayRef<real>());
     }
 
     /* Wait for local GPU NB outputs on the non-alternating wait path */
