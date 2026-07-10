@@ -182,6 +182,10 @@ struct PmeGpuAtomParams
      * computation, but reallocation happens only at DD.
      */
     HIDE_FROM_OPENCL_COMPILER(DeviceBuffer<gmx::RVec>) d_forces;
+    /*! \brief Constant-pH: global GPU memory handle with output per-atom reciprocal-space
+     * electrostatic potential (the dV/dlambda driver). Filled by the gather kernel and copied
+     * back each step; only allocated/used when the run needs it (lambda dynamics). */
+    HIDE_FROM_OPENCL_COMPILER(DeviceBuffer<float>) d_potentials;
     /*! \brief Global GPU memory array handle with ivec atom gridline indices.
      * Computed on GPU in the spline calculation part.
      */

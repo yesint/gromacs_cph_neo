@@ -138,9 +138,27 @@ Layer 0 alone upgrades the port from "RF single-rank" to "general CPU cph." It i
   single-point dV/dλ on the RF 46-group system matches the CPU oracle to max rel **2.3e-6** → the
   device force path is correct, **GO**. Build with `GMX_SIMD=AVX2_256` (portable across the cluster's
   Zen3 GPU nodes). TODO perf: warp-shuffle reduction to replace per-pair `atomicAdd`.
-- **L1.2 PME reciprocal potential on GPU (3–4d).** Port the fork's GPU PME potential gather
-  (`pme_gpu.cpp` + the PME gather kernel producing `output.potentials_`) to 2026's PME. Combine with
-  L1.1 into one `fr->electrostaticPotential`.
+- **L1.2 PME reciprocal potential on GPU — 🚧 IN PROGRESS (scaffolding started).** Port the fork's GPU
+  PME potential gather (order 4, 4 threads/atom) to 2026's PME. Exact steps (fork = reference):
+  - ✅ started: `d_potentials` in `PmeGpuAtomParams` (pme_gpu_types.h); `h_potentials` (padded) in
+    `PmeGpuStaging` (pme_gpu_staging.h).
+  - TODO buffers: `potentialsSize/SizeAlloc` in `PmeGpu::archSpecific`; realloc `d_potentials` +
+    `resizeWithPadding(h_potentials)` in `pme_gpu_realloc_forces`; free in `pme_gpu_free_forces`; D2H
+    `d_potentials→h_potentials` in `pme_gpu_copy_output_forces`; pin `h_potentials` in the init.
+  - TODO kernel (`pme_gather.cu`, the crux): in `sumForceComponents` also accumulate the potential
+    (`potential += tdx.x*tdy.x*fxy1`, theta·grid, no derivative); reduce it across the 4 threads/atom in
+    `reduce_atom_forces` (add a `reducePotential` path, warp-shuffle like the fork); write
+    `gm_potentials[atomIndexGlobal]` on the splineIndex%4==3 thread. Template/launch-gate on cph so
+    non-cph PME pays nothing (fork uses a `reducePotential` template arg). Replicate to
+    sycl/hip/opencl gather later.
+  - TODO output+wiring: `pme_gpu_getOutput` sets `output.potentials_ = staging.h_potentials`;
+    `pme_gpu_reduce_outputs`/`pme_gpu_wait_and_reduce` add `potentials_` into an
+    `electrostaticPotential` arg (as the fork's `pme_gpu.cpp` does); thread `fr->electrostaticPotential`
+    from the caller (sim_util/force path) into the GPU-PME reduce — the GPU analogue of the L0.1
+    `gmx_pme_do(..., potentials)` wiring. Then it combines with the L1.1 real-space potential in the
+    same `fr->electrostaticPotential`.
+  - **Validate:** PME on GPU (`-pme gpu`) M1-GPU-style vs CPU oracle on the 46-group + 88k all-atom
+    systems (`bigpme_run/big2.tpr`). cuFFT (no CPU-FFTW node/SIMD issue).
 - **L1.3 Classic-path GPU cph (1d).** Force buffer-ops OFF; per-step full x+q H2D, potential D2H, host
   λ integration (unchanged). Flip the `nbnxm_setup.cpp:321` hard-fatal to allow `-nb gpu`.
   **Gate M1-GPU (GO/NO-GO):** single-point dV/dλ, GPU vs the PME oracle, ≤ ~1e-3 (single precision +

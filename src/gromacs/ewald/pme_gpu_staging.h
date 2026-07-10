@@ -65,6 +65,9 @@ struct PmeGpuStaging
     //! Host-side force buffer
     gmx::PaddedHostVector<gmx::RVec> h_forces;
 
+    //! Constant-pH: host-side per-atom reciprocal-space potential buffer (staged from d_potentials)
+    gmx::PaddedHostVector<float> h_potentials;
+
     /*! \brief Virial and energy intermediate host-side buffer. Size is PME_GPU_VIRIAL_AND_ENERGY_COUNT. */
     std::array<gmx::HostVector<float>, sc_numFepStates> h_virialAndEnergy;
     /*! \brief B-spline values intermediate host-side buffer. */
