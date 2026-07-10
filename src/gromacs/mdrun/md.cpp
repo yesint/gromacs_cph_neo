@@ -1402,6 +1402,19 @@ void gmx::LegacySimulator::do_md()
                                  mx, constantph_->lambdaCoordinates()[0].x);
                     std::fclose(fpt);
                 }
+                // Per-step ALL-group lambda dump (CPU-vs-GPU trajectory comparison): one row
+                // "step lambda0 lambda1 ..." appended each step when GMX_CPH_DUMP_LAMBDAS is set.
+                if (std::getenv("GMX_CPH_DUMP_LAMBDAS"))
+                {
+                    FILE* fpl = std::fopen("cph_port_lambdas.dat", "a");
+                    std::fprintf(fpl, "%ld", long(step));
+                    for (const auto& lc : constantph_->lambdaCoordinates())
+                    {
+                        std::fprintf(fpl, " %.6f", lc.x);
+                    }
+                    std::fprintf(fpl, "\n");
+                    std::fclose(fpl);
+                }
             }
 
             // VV integrators do not need the following velocity half step
