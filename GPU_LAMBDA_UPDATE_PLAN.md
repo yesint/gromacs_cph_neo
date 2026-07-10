@@ -129,10 +129,15 @@ Layer 0 alone upgrades the port from "RF single-rank" to "general CPU cph." It i
 *any* large-system use and is independent of the GPU decision.
 
 ### Layer 1 — correct potential on the GPU (classic path, λ still on host)
-- **L1.1 NB real-space potential on GPU (3–5d, per-backend kernel).** = `GPU_PORT_PLAN.md`
-  WP-G1/G2/G3: add `DeviceBuffer<float> potential` to `NBAtomDataGpu`, clear each step with `f`,
-  accumulate per pair in `nbnxm_cuda_kernel.cuh` (`atomicAdd`, or the register-accumulator variant),
-  D2H every step (cph-gated), reduce nbat→atom via `gridSet.cells()`, RF/Ewald self-term host-side.
+- **L1.1 NB real-space potential on GPU — ✅ DONE + M1-GPU PASS (2026-07-10, CUDA).** WP-G1/G2/G3/G5
+  (commits 149714f, 61868b4, 7bb98be, cdd1b74): `DeviceBuffer<float> potential` on `NBAtomDataGpu`
+  (alloc/clear/free like `f`, gated); `cuda/nbnxm_cuda_kernel.cuh` accumulates the per-pair potential
+  (RF/cutoff/Ewald, `atomicAdd`, correctness-first); D2H → nbat host buffer → existing
+  `reduceElectrostaticPotential`; host RF/Ewald self-term (GPU-path); classic buffer-ops forced +
+  GPU-update off for cph; WP-G0 guard flipped to allow real GPU NB. **M1-GPU:** `-nb gpu` (sm_86)
+  single-point dV/dλ on the RF 46-group system matches the CPU oracle to max rel **2.3e-6** → the
+  device force path is correct, **GO**. Build with `GMX_SIMD=AVX2_256` (portable across the cluster's
+  Zen3 GPU nodes). TODO perf: warp-shuffle reduction to replace per-pair `atomicAdd`.
 - **L1.2 PME reciprocal potential on GPU (3–4d).** Port the fork's GPU PME potential gather
   (`pme_gpu.cpp` + the PME gather kernel producing `output.potentials_`) to 2026's PME. Combine with
   L1.1 into one `fr->electrostaticPotential`.
