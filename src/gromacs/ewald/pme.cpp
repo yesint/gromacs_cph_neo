@@ -1879,6 +1879,28 @@ void gmx_pme_reinit_atoms(gmx_pme_t*                pme,
     }
 }
 
+void gmx_pme_reinit_charges_gpu(gmx_pme_t* pme, gmx::ArrayRef<const real> chargesA)
+{
+    /* Constant-pH (GPU-resident): re-upload only the per-atom charges (PME coefficients) so PME
+     * reciprocal space uses the current lambda-interpolated charges each step, without the atom
+     * reallocation (splines/grid indices) that gmx_pme_reinit_atoms does. The atom count is
+     * unchanged, so pme_gpu_realloc_and_copy_input_coefficients performs a plain H2D copy (its
+     * realloc is a no-op at the current size). GPU builds are single precision (real == float). */
+    if (pme == nullptr || pme->gpu == nullptr)
+    {
+        return;
+    }
+    // Constant-pH is not a free-energy (FEP) run, so PME uses a single charge grid; refresh
+    // grid 0 only. (A second grid only exists for Coulomb FEP, which is incompatible with cph.)
+    GMX_RELEASE_ASSERT(!pme->bFEP_q, "Constant-pH charge refresh assumes a single (non-FEP) grid");
+#if !GMX_DOUBLE
+    pme_gpu_realloc_and_copy_input_coefficients(
+            pme->gpu, reinterpret_cast<const float*>(chargesA.data()), 0);
+#else
+    GMX_UNUSED_VALUE(chargesA);
+#endif
+}
+
 bool gmx_pme_grid_matches(const gmx_pme_t& pme, const ivec grid_size)
 {
     return (pme.nkx == grid_size[XX] && pme.nky == grid_size[YY] && pme.nkz == grid_size[ZZ]);

@@ -294,6 +294,12 @@ void gmx_pme_reinit_atoms(gmx_pme_t*                pme,
                           gmx::ArrayRef<const real> chargesA,
                           gmx::ArrayRef<const real> chargesB);
 
+/*! \brief Constant-pH (GPU-resident): re-upload only the per-atom charges (PME coefficients) to
+ * the GPU each step, so PME reciprocal space uses the current lambda-interpolated charges. Unlike
+ * gmx_pme_reinit_atoms this does not reallocate atom data (the atom count is unchanged). No-op if
+ * PME is not on the GPU. */
+void gmx_pme_reinit_charges_gpu(gmx_pme_t* pme, gmx::ArrayRef<const real> chargesA);
+
 /* A block of PME GPU functions */
 
 /*! \brief Checks whether the GROMACS build allows to run PME on GPU.
