@@ -300,3 +300,23 @@ so two data paths had to be rebuilt for cph, plus the workload guards:
   divergence 4.9e-3@1000, λ actively titrating (range [-0.04, 1.06]).
 - **Still O(Natoms) per step** (correctness-first): potential D2H + NB charge H2D + PME coeff H2D. The
   device group-reduce (L2.2) and device charge-scatter (L2.3) that make transfers O(Ngroups) are next.
+
+### ✅ Clean-build fixes + own-FFTW re-validation (2026-07-14)
+A from-scratch CPU configure/build with `-DGMX_BUILD_OWN_FFTW=ON` (fresh `build-own-fftw`,
+gcc 16.1.1, downloads+static-links FFTW 3.3.10) exposed **two latent build breaks** that the
+incremental `build-cpu` had been masking (the affected TUs were never recompiled after the L3
+header change). Both are introduced by the L3 GPU work and are inert for GPU (CUDA) builds:
+- **Compile (`ewald/pme.h`):** the `GPU_FUNC_QUALIFIER` PME-GPU stubs take
+  `gmx::ArrayRef<real> electrostaticPotential` **by value**, but the header only forward-declared
+  `ArrayRef`. With `GMX_GPU=OFF` those stubs become `gmx_unused static {…}` *definitions*, where a
+  by-value parameter of incomplete type is illegal → `'electrostaticPotential' has incomplete type`
+  (in `taskassignment/*.cpp`, `modularsimulator.cpp`). Fix: `#include "gromacs/utility/arrayref.h"`,
+  drop the now-redundant forward decl.
+- **Link (`ewald/pme.cpp`):** L3.1 `gmx_pme_reinit_charges_gpu` called the GPU-only internal
+  `pme_gpu_realloc_and_copy_input_coefficients` (no CPU stub; its TU `pme_gpu_internal.cpp` is not
+  compiled off-GPU) under `#if !GMX_DOUBLE` → undefined reference in a CPU build. Fix: guard with
+  `#if GMX_GPU && !GMX_DOUBLE` (dead code on CPU — `pme->gpu` is always null there, early-returns).
+- **Validated (build-own-fftw vs 2021 fork, single point):** M0a PME 46/46 groups max_abs 1.9e-3 /
+  single-prec floor (rel 1.3e-5); M1 RF ref-kernel max_abs 5.0e-5, SIMD max_abs 1.0e-4 vs fork and
+  6.0e-5 vs ref — i.e. bit-for-bit the documented `build-cpu` figures. Parity with the fork stands;
+  the two fixes do not perturb CPU numerics (one compiled out on CPU, one a header include).

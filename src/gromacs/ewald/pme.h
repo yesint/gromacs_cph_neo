@@ -51,6 +51,7 @@
 
 #include "gromacs/gpu_utils/devicebuffer_datatype.h"
 #include "gromacs/gpu_utils/gpu_macros.h"
+#include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/basedefinitions.h"
 #include "gromacs/utility/real.h"
 #include "gromacs/utility/vectypes.h"
@@ -76,8 +77,6 @@ class GpuEventSynchronizer;
 
 namespace gmx
 {
-template<typename>
-class ArrayRef;
 class ForceWithVirial;
 class MDLogger;
 enum class PinningPolicy : int;

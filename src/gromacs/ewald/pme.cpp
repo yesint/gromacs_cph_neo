@@ -1893,7 +1893,10 @@ void gmx_pme_reinit_charges_gpu(gmx_pme_t* pme, gmx::ArrayRef<const real> charge
     // Constant-pH is not a free-energy (FEP) run, so PME uses a single charge grid; refresh
     // grid 0 only. (A second grid only exists for Coulomb FEP, which is incompatible with cph.)
     GMX_RELEASE_ASSERT(!pme->bFEP_q, "Constant-pH charge refresh assumes a single (non-FEP) grid");
-#if !GMX_DOUBLE
+    // pme_gpu_realloc_and_copy_input_coefficients is an internal GPU helper (no CPU stub) and lives
+    // in a GPU-only TU, so the call must be compiled out on non-GPU builds. GPU builds are single
+    // precision (real == float); the reinterpret_cast is only valid there.
+#if GMX_GPU && !GMX_DOUBLE
     pme_gpu_realloc_and_copy_input_coefficients(
             pme->gpu, reinterpret_cast<const float*>(chargesA.data()), 0);
 #else
