@@ -2731,6 +2731,16 @@ void get_ir(const char*     mdparin,
                     "integrator is used, the cpHMD charges will be set (helpful for energy "
                     "minimization), but the lambda-coordinates will not be updated.");
         }
+        if (ir->efep != FreeEnergyPerturbationType::No)
+        {
+            /* The 1-4 pair kernel cannot produce both the free-energy derivative and the
+             * per-atom electrostatic potential that lambda dynamics needs, so with cpHMD
+             * the perturbed 1-4 path is not taken. Rather than silently changing the
+             * free-energy results, refuse the combination. */
+            wi->addError(
+                    "cpHMD (lambda-dynamics) cannot be combined with free-energy perturbation "
+                    "(free-energy != no).");
+        }
         ir->lambdaDynamicsSimulationParameters =
                 std::make_unique<gmx::LambdaDynamicsSimulationParameters>(&inp, wi);
     }

@@ -320,3 +320,84 @@ header change). Both are introduced by the L3 GPU work and are inert for GPU (CU
   single-prec floor (rel 1.3e-5); M1 RF ref-kernel max_abs 5.0e-5, SIMD max_abs 1.0e-4 vs fork and
   6.0e-5 vs ref — i.e. bit-for-bit the documented `build-cpu` figures. Parity with the fork stands;
   the two fixes do not perturb CPU numerics (one compiled out on CPU, one a header include).
+
+### 🐛→✅ BUG FIX: missing 1-4 pair contribution to the per-atom potential (2026-08-05)
+
+**Symptom** (reported in `CPH_AA_BUG_REPRODUCER.md`): an all-atom CHARMM36m system
+(90 279 atoms, PME, 45 titratable sites / 54 λ coordinates, 90 BUF) aborted on the first
+λ update in the 2026 port —
+
+```
+constant_ph.cpp: Assertion failed: (lambdaCoordinate.x < 1.15 && lambdaCoordinate.x > -0.15)
+Lambda coordinate left the range for which it has been parametrised.
+```
+
+while the **same** files ran fine in the 2021 fork, and ran in the port with λ frozen
+(`lambda-dynamics-calibration = yes`). Not the GPU, not the atom order, not the initial λ,
+not the multistate His path, not the timestep — all ruled out in the report.
+
+**Root cause.** The port never implemented the fork's hunk in
+**`src/gromacs/listed_forces/pairs.cpp`** (`gromacs/listed_forces/pairs.cpp|39|8` in
+`_portref/00_stat.txt`). The **1-4 pair (`[ pairs ]`) interactions contribute to the per-atom
+electrostatic potential** that drives dV/dλ, exactly as the non-bonded kernel does, and that
+contribution was simply absent: `src/gromacs/listed_forces/` was still pristine 2026.1.
+For all-atom force fields the missing term is huge — up to ~950 kJ/mol/e for ARGT,
+**enough to flip the sign of dV/dλ** on 12 of 54 coordinates — so λ was driven out of its
+parametrised range on the first update. This is the [[feedback_get_the_logic]] failure mode
+again: the potential must ride *every* place the electrostatic energy is computed, not just
+the NB kernel and PME.
+
+**Why the CG campaign never hit it:** Martini topologies have **no `[ pairs ]` section at all**
+(verified across the full_size campaign `.itp`/`.top` set), so the code path is never entered
+and the 480-window CG results are bit-identical. The AA↔fork dV/dλ comparison had never been
+run — M0a/M1 are Martini, and the 88k all-atom PME gates (L1.2/L3) compared port-GPU against
+port-CPU, so a term missing from *both* cancelled out.
+
+**Fix.** Port the fork's hunk, adapted to 2026 APIs:
+- `evaluate_single` gains an optional `real* coulombValue` out-param returning the tabulated
+  Coulomb value **without** the charge-product prefactor (`velec == qq * coulombValue`).
+- `do_pairs_general` accumulates `potential[a] += prefactor * q_partner * coulombValue` for
+  atoms with `constantPH->isLambdaAtom()`, under `#pragma omp atomic` (the potential buffer is
+  shared across the listed-forces threads, unlike the force buffers). Unlike the fork, the
+  prefactor/partner-charge pair is set per-ftype alongside `qq`, so `LJC14Q`/`LJCNBPairs`
+  (which take their charges from `iparams`, not `mdatoms->chargeA`) are also correct; for
+  `LJ14` it reduces to the fork's `epsfac * fudgeQQ * chargeA[partner]`.
+- **`do_pairs` must not take the fast path when the potential is being accumulated.** That
+  path computes forces only and never evaluates the Coulomb table. It is taken whenever
+  `!computeVirial && !computeEnergy`, i.e. on *most* steps (`nstcalcenergy`), so without this
+  guard the 1-4 term would appear only on energy steps — inconsistent forces, not just a
+  constant offset. Guard: `&& fr->electrostaticPotential.empty()`.
+- **New guard (readir.cpp):** cpHMD + free-energy perturbation is now a hard grompp **error**.
+  The fork silently suppressed the perturbed 1-4 path when cph was active
+  (`bFreeEnergy && fr->electrostaticPotential.empty()`); silently changing FEP results is a
+  trap, so the combination is refused instead. Also in `README.md`.
+
+**Validation (local `build-cpu` vs the 2021 fork oracle, same 90 279-atom AA system; each
+side grompps its own tpr).** New gate **M6** — the first AA all-atom dV/dλ comparison
+against the fork:
+
+| check | result |
+|---|---|
+| M6a single point, PME, 54 coords | max abs diff **5.0e-4**, worst rel **2.1e-5** |
+| M6b single point, Reaction-Field | max abs diff **4.9e-3**, worst rel **5.0e-6** |
+| M6c single point at a *displaced* geometry + all 54 λ off-centre (multistate HSPT off equal splits) | worst rel **2.7e-6** |
+| M6d 60-step λ trajectory, fixed λ seeds, `tcoupl=no pcoupl=no` | λ matches fork to **5.5e-5** = the fork's xvg output precision; atomic coords identical to `.gro` precision |
+| M6e the reproducer itself: 1500 steps, production mdp (dt 0.002, c-rescale, all 4 HSPT) | **no assertion**; λ evolves over [-0.116, 1.074], i.e. inside the ±0.15 tolerance, same order as the fork's own -0.065 excursion |
+
+Before the fix the same single point was off by a **per-residue-type** offset —
+LYST -14, ASPT -145, GLUT -164, ARGT **-951**, HSPT +68/+150/+99, BUF exactly 0 (one atom ⇒ no
+1-4 pairs) — and, diagnostically, **identical for RF and PME**, which is what pinned the fault
+on a coulombtype-independent term (the 1-4 pairs) rather than on the NB kernel or the
+reciprocal path. The port's SIMD and plain-C kernels agreed with each other to 9e-4 throughout,
+which ruled the kernels out early.
+
+**Note on the 60-step λ divergence with coupling ON** (0.024 at step 60, seen before M6d): that
+is **not** cph. It survives pinning `ld-seed`, and disappears completely when
+`pcoupl`/`tcoupl` are switched off — the 2021 and 2026 c-rescale/verlet-buffer implementations
+differ (this system runs at ~5900 bar), so the *atomic* trajectories separate and λ follows.
+Any port↔fork λ-trajectory comparison must therefore run with coupling off.
+
+**Files:** `src/gromacs/listed_forces/pairs.cpp`, `src/gromacs/gmxpreprocess/readir.cpp`,
+`README.md`. Non-cph runs are untouched: with lambda dynamics off
+`fr->electrostaticPotential` is empty ⇒ `potential == nullptr`, the fast path guard is
+`true`, and `evaluate_single` gets `nullptr`.

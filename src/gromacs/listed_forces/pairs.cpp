@@ -51,6 +51,7 @@
 #include <filesystem>
 #include <memory>
 
+#include "gromacs/applied_forces/constant_ph/constant_ph.h"
 #include "gromacs/listed_forces/bonded.h"
 #include "gromacs/math/functions.h"
 #include "gromacs/mdtypes/enerdata.h"
@@ -115,7 +116,12 @@ static void warning_rlimit(const rvec* x, int ai, int aj, int* global_atom_index
     }
 }
 
-/*! \brief Compute the energy and force for a single pair interaction */
+/*! \brief Compute the energy and force for a single pair interaction
+ *
+ * \p coulombValue, when not nullptr, returns the tabulated Coulomb interaction
+ * without the charge-product prefactor, i.e. \p velec == \p qq * \p coulombValue.
+ * Constant-pH needs this to accumulate the per-atom electrostatic potential.
+ */
 static real evaluate_single(real        r2,
                             real        tabscale,
                             const real* vftab,
@@ -124,7 +130,8 @@ static real evaluate_single(real        r2,
                             real        c6,
                             real        c12,
                             real*       velec,
-                            real*       vvdw)
+                            real*       vvdw,
+                            real*       coulombValue = nullptr)
 {
     real rinv, r, rtab, eps, eps2, Y, F, Geps, Heps2, Fp, VVe, FFe, VVd, FFd, VVr, FFr, fscal;
     int  ntab;
@@ -164,6 +171,10 @@ static real evaluate_single(real        r2,
 
     *velec = qq * VVe;
     *vvdw  = c6 * VVd + c12 * VVr;
+    if (coulombValue != nullptr)
+    {
+        *coulombValue = VVe;
+    }
 
     fscal = -(qq * FFe + c6 * FFd + c12 * FFr) * tabscale * rinv;
 
@@ -548,6 +559,16 @@ static real do_pairs_general(InteractionFunction                 ftype,
     real       qqB, c6B, c12B;
     const real oneSixth = 1.0_real / 6.0_real;
 
+    /* Constant-pH: the 1-4 pair interactions contribute to the per-atom electrostatic
+     * potential that drives dV/dlambda, just like the non-bonded kernel does. The buffer
+     * is only allocated when lambda dynamics is active. Only atoms that are part of a
+     * lambda group need their potential, so we accumulate for those only.
+     * TODO: Change this pointer handling and specialize this kernel.
+     */
+    real* potential = fr->electrostaticPotential.data();
+    /* std::vector<bool> is a bit field, so no ArrayRef; take a pointer to the vector. */
+    const std::vector<bool>* isLambdaAtom = potential ? &fr->constantPH->isLambdaAtom() : nullptr;
+
     switch (ftype)
     {
         case InteractionFunction::LennardJones14:
@@ -621,29 +642,50 @@ static real do_pairs_general(InteractionFunction                 ftype,
         aj    = iatoms[i++];
         gid   = GID(cENER[ai], cENER[aj], numEnergyGroups);
 
+        /* Constant-pH: the Coulomb prefactor times the charge of the partner atom, so the
+         * potential contribution is this factor times the (charge-free) tabulated Coulomb
+         * value. Set together with qq below, since the charge source is ftype dependent. */
+        real potentialFactorI = 0;
+        real potentialFactorJ = 0;
+
         /* Get parameters */
         switch (ftype)
         {
             case InteractionFunction::LennardJones14:
                 bFreeEnergy =
-                        (fr->efep != FreeEnergyPerturbationType::No
+                        (fr->efep != FreeEnergyPerturbationType::No && potential == nullptr
                          && ((!atomIsPerturbed.empty() && (atomIsPerturbed[ai] || atomIsPerturbed[aj]))
                              || iparams[itype].lj14.c6A != iparams[itype].lj14.c6B
                              || iparams[itype].lj14.c12A != iparams[itype].lj14.c12B));
                 qq  = chargeA[ai] * chargeA[aj] * epsfac * fr->fudgeQQ;
                 c6  = iparams[itype].lj14.c6A;
                 c12 = iparams[itype].lj14.c12A;
+                if (potential != nullptr)
+                {
+                    potentialFactorI = epsfac * fr->fudgeQQ * chargeA[aj];
+                    potentialFactorJ = epsfac * fr->fudgeQQ * chargeA[ai];
+                }
                 break;
             case InteractionFunction::LennardJonesCoulomb14Q:
                 qq = iparams[itype].ljc14.qi * iparams[itype].ljc14.qj * epsfac
                      * iparams[itype].ljc14.fqq;
                 c6  = iparams[itype].ljc14.c6;
                 c12 = iparams[itype].ljc14.c12;
+                if (potential != nullptr)
+                {
+                    potentialFactorI = epsfac * iparams[itype].ljc14.fqq * iparams[itype].ljc14.qj;
+                    potentialFactorJ = epsfac * iparams[itype].ljc14.fqq * iparams[itype].ljc14.qi;
+                }
                 break;
             case InteractionFunction::LennardJonesCoulombNonBondedPairs:
                 qq  = iparams[itype].ljcnb.qi * iparams[itype].ljcnb.qj * epsfac;
                 c6  = iparams[itype].ljcnb.c6;
                 c12 = iparams[itype].ljcnb.c12;
+                if (potential != nullptr)
+                {
+                    potentialFactorI = epsfac * iparams[itype].ljcnb.qj;
+                    potentialFactorJ = epsfac * iparams[itype].ljcnb.qi;
+                }
                 break;
             default:
                 /* Cannot happen since we called gmx_fatal() above in this case */
@@ -809,7 +851,8 @@ static real do_pairs_general(InteractionFunction                 ftype,
         else
         {
             /* Evaluate tabulated interaction without free energy */
-            fscal = evaluate_single(r2,
+            real coulombValue = 0;
+            fscal             = evaluate_single(r2,
                                     fr->pairsTable->scale,
                                     fr->pairsTable->data.data(),
                                     fr->pairsTable->stride,
@@ -817,7 +860,29 @@ static real do_pairs_general(InteractionFunction                 ftype,
                                     c6,
                                     c12,
                                     &velec,
-                                    &vvdw);
+                                    &vvdw,
+                                    potential != nullptr ? &coulombValue : nullptr);
+
+            /* Constant-pH: add the 1-4 pair contribution to the per-atom electrostatic
+             * potential. Note that we only need this for atoms that are subject to lambda
+             * dynamics. Instead of using OpenMP atomics, we could use thread-local potential
+             * buffers, analogous to the force buffers.
+             */
+            if (potential != nullptr && ((*isLambdaAtom)[ai] || (*isLambdaAtom)[aj]))
+            {
+                if ((*isLambdaAtom)[ai])
+                {
+                    const real potentialContribution = potentialFactorI * coulombValue;
+#pragma omp atomic
+                    potential[ai] += potentialContribution;
+                }
+                if ((*isLambdaAtom)[aj])
+                {
+                    const real potentialContribution = potentialFactorJ * coulombValue;
+#pragma omp atomic
+                    potential[aj] += potentialContribution;
+                }
+            }
         }
 
         energygrp_elec[gid] += velec;
@@ -969,9 +1034,15 @@ void do_pairs(InteractionFunction                 ftype,
               gmx_grppairener_t*                  grppener,
               int*                                global_atom_index)
 {
+    /* The fast code-path below computes forces only; it never evaluates the Coulomb
+     * table, so it cannot provide the per-atom electrostatic potential that constant-pH
+     * needs. Take the general path whenever that potential is being accumulated,
+     * otherwise the 1-4 contribution to dV/dlambda would be present only on the steps
+     * that happen to compute energies. */
     if (ftype == InteractionFunction::LennardJones14 && fr->ic->vdw.type != VanDerWaalsType::User
         && !usingUserTableElectrostatics(fr->ic->coulomb.type) && !havePerturbedInteractions
-        && (!stepWork.computeVirial && !stepWork.computeEnergy))
+        && (!stepWork.computeVirial && !stepWork.computeEnergy)
+        && fr->electrostaticPotential.empty())
     {
         /* We use a fast code-path for plain LJ 1-4 without FEP.
          *

@@ -70,4 +70,10 @@ If you use constant-pH MD, cite:
    (titration / pKa vs the fork, a full production window, refdata regression)
    have not been done.
 
+9. **Constant pH cannot be combined with free-energy perturbation.** `lambda-dynamics = yes`
+   together with `free-energy != no` is refused by `grompp`. The 1-4 pair kernel cannot
+   produce both the free-energy derivative and the per-atom electrostatic potential that
+   λ dynamics needs, so allowing the combination would silently change the free-energy
+   results.
+
 Inherited from upstream: separate PME ranks are not supported with MPI.
