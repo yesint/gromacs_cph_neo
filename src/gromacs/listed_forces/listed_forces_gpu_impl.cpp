@@ -139,6 +139,14 @@ bool inputSupportsListedForcesGpu(const t_inputrec& ir, const gmx_mtop_t& mtop, 
             "a dynamical integrator (md, sd, etc).");
     errorReasons.appendIf(EI_MIMIC(ir.eI), "MiMiC");
     errorReasons.appendIf(ir.useMts, "Cannot run with multiple time stepping");
+    /* Constant-pH: the 1-4 pair interactions contribute to the per-atom electrostatic
+     * potential that drives dV/dlambda (see do_pairs in listed_forces/pairs.cpp). The GPU
+     * bonded kernels do not accumulate that potential, so offloading them would silently
+     * drop the 1-4 term and lambda would be driven out of its parametrised range. Keep the
+     * listed forces on the CPU for lambda dynamics. */
+    errorReasons.appendIf(ir.lambda_dynamics,
+                          "Cannot run with constant-pH lambda dynamics, which needs the 1-4 pair "
+                          "contribution to the per-atom electrostatic potential");
     // There is one energy group for each wall and those are not used for 1-4 interactions
     errorReasons.appendIf((ir.opts.ngener - ir.nwall > 1), "Cannot run with multiple energy groups");
     errorReasons.finishContext();

@@ -401,3 +401,17 @@ Any port↔fork λ-trajectory comparison must therefore run with coupling off.
 `README.md`. Non-cph runs are untouched: with lambda dynamics off
 `fr->electrostaticPotential` is empty ⇒ `potential == nullptr`, the fast path guard is
 `true`, and `evaluate_single` gets `nullptr`.
+
+**Follow-up on the GPU path (same day).** With the `pairs.cpp` fix in place the CPU run was
+clean but `-nb gpu -pme gpu` (with `-bonded auto`, which offloads listed forces once NB *and*
+PME are on the GPU) still hit the assertion at step 0. Cause: the **GPU bonded kernels compute
+the 1-4 pairs on the device and do not accumulate the per-atom potential**, so offloading them
+silently drops the term again. Fix: `inputSupportsListedForcesGpu()` now reports
+`lambda_dynamics` as an unsupported input, so `-bonded auto` keeps listed forces on the CPU and
+an explicit `-bonded gpu` fails fast (`InconsistentInputError`) instead of giving wrong dV/dλ.
+
+Bisection at `nsteps 0` on the reproducer's own tpr (L40S, `-bonded cpu` forced), each vs the
+CPU reference: `-nb gpu` **7.1e-5**, `-nb gpu -pme gpu` **1.6e-4**, `-nb gpu -pme gpu -update
+gpu` **1.5e-4** worst relative (worst cases are small-magnitude HSPT coordinates; ≤0.017
+absolute) — i.e. the documented single-precision cuFFT floor, so the GPU potential path itself
+was never at fault.
