@@ -66,6 +66,7 @@
 #include "gromacs/trajectory/energyframe.h"
 #include "gromacs/utility/arrayref.h"
 #include "gromacs/utility/enumerationhelpers.h"
+#include "gromacs/utility/fatalerror.h"
 #include "gromacs/utility/gmxassert.h"
 #include "gromacs/utility/logger.h"
 #include "gromacs/utility/stringutil.h"
@@ -1564,12 +1565,25 @@ ConstantPHLambdaEnergies ConstantPH::updateLambdas(const int64_t step)
             }
             if (!isCalibrationRun_)
             {
-                for (auto& lambdaCoordinate : lambdaCoordinates_)
+                /* Report which coordinate left the range, its value and the step: with a bare
+                 * assertion there is no way to tell whether one group is running away or the
+                 * whole setup is marginal, which is what you need to know to fix the input. */
+                for (gmx::Index i = 0; i < gmx::ssize(lambdaCoordinates_); i++)
                 {
-                    GMX_RELEASE_ASSERT((lambdaCoordinate.x < 1.15 && lambdaCoordinate.x > -0.15),
-                                       "Lambda coordinate left the range for which it has been "
-                                       "parametrised. Check your input parameters");
+                    const gmx::LambdaCoordinate& lambdaCoordinate = lambdaCoordinates_[i];
+                    if (!(lambdaCoordinate.x < 1.15 && lambdaCoordinate.x > -0.15))
                     {
+                        gmx_fatal(FARGS,
+                                  "Lambda coordinate %d (of %d) left the range for which it has "
+                                  "been parametrised at step %lld: lambda = %g, allowed range is "
+                                  "-0.15 to 1.15. The lambda dynamics is driving this coordinate "
+                                  "too far outside [0,1]; check lambda-dynamics-lambda-particle-"
+                                  "mass, the group barrier, the dvdl coefficients for this group "
+                                  "type and the simulation timestep.",
+                                  int(i) + 1,
+                                  int(gmx::ssize(lambdaCoordinates_)),
+                                  static_cast<long long>(step),
+                                  lambdaCoordinate.x);
                     }
                 }
             }

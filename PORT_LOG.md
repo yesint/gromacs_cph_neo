@@ -415,3 +415,34 @@ CPU reference: `-nb gpu` **7.1e-5**, `-nb gpu -pme gpu` **1.6e-4**, `-nb gpu -pm
 gpu` **1.5e-4** worst relative (worst cases are small-magnitude HSPT coordinates; ≤0.017
 absolute) — i.e. the documented single-precision cuFFT floor, so the GPU potential path itself
 was never at fault.
+
+**GPU-resident path and the ±0.15 boundary (closing the reproducer).** After the two fixes, a
+step-bisection on the reproducer's own tpr (L40S, 400 steps each, `-bonded cpu`) gives:
+`-nb cpu` clean, `-nb gpu -pme cpu` clean, `-nb gpu -pme gpu` clean, `-nb gpu -pme gpu -update
+gpu` **trips the assertion at step ~397**. That is **not** an L3 bug: the λ deviation from the
+CPU run starts at the FP floor (0 at step 0, 6e-6 at step 1) and grows exponentially
+(1.6e-3@10, 3.6e-2@50, 0.17@100 …) — Lyapunov divergence, identical in character to the
+`-pme gpu` (update-cpu) run, which starts at 1e-6 and reaches 0.74 by step 397 without tripping.
+
+The real finding is that **this AA setup runs right at the assertion boundary.** Over the same
+400 steps from the same start, λ excursions are:
+
+| run | λ range over 400 steps |
+|---|---|
+| 2021 fork (CPU) | **[-0.1392, 1.0921]** |
+| port (CPU) | **[-0.1408, 1.0994]** |
+| port `-nb gpu -pme gpu` | [-0.1049, 1.0952] |
+| port GPU-resident | [-0.1472, 1.0852] → trips |
+
+Fork and port are statistically identical, i.e. the port now reproduces the fork's λ dynamics on
+this system — and **both are one FP perturbation away from -0.15**. Whether a given run survives
+is decided by rounding, which is exactly what the GPU-resident case demonstrates. This is a
+**run-parameter (science) matter, not a port defect**: with `lambda-particle-mass = 5.0` and
+`barrier = 7.5` this system drives λ ~0.14 past the well. Remedies are the user's call — heavier
+λ particle mass, larger barrier, smaller `dt`, longer fixed-λ equilibration, or a review of the
+dvdl calibration for these residue types.
+
+To make that diagnosable, the bare `GMX_RELEASE_ASSERT` in `updateLambdas` is replaced by a
+`gmx_fatal` naming the coordinate, its λ value and the step, and pointing at the knobs — same
+abort semantics, but it now distinguishes "one group is running away" from "the whole setup is
+marginal".
