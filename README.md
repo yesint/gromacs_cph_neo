@@ -47,10 +47,11 @@ If you use constant-pH MD, cite:
 ## Limitations
 
 1. **GPU support is CUDA only.** The per-atom-potential kernels exist for CUDA
-   (non-bonded and PME gather). **SYCL and HIP builds have no such kernels**, and
-   nothing currently stops you from running there — `-nb gpu` on a SYCL/HIP build
-   would silently give dV/dλ = 0. On those builds run `mdrun -nb cpu`. GPU
-   *emulation* (`GMX_EMULATE_GPU`) does fail fast.
+   (non-bonded and PME gather); SYCL and HIP builds have no such kernels. This is
+   guarded, so it cannot silently give dV/dλ = 0: on a non-CUDA build `-nb auto`
+   falls back to CPU non-bonded (logging why) and `-nb gpu` fails fast. PME on a GPU
+   requires the non-bonded on a GPU, so it is covered by the same guard. GPU
+   *emulation* (`GMX_EMULATE_GPU`) also fails fast.
 
 2. **The GPU-resident update (`-update gpu`) needs a single GPU**: no domain
    decomposition and no separate PME rank. DD or separate-PME runs fall back to the
