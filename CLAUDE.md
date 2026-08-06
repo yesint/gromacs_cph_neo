@@ -135,6 +135,12 @@ difference is purely the ported force path. Each side grompps its own tpr (tpx g
 | GPU PME / all-GPU / resident | 88k all-atom CHARMM36 PME, `-nb gpu -pme gpu [-update gpu]` | single-prec cuFFT floor (max ~6e-5); 1000-step λ = FP Lyapunov divergence only | `pmegpu_run/`, `bigpme_run/`, `traj1k/`, R0/R0b runs on aurum2 |
 | **M6** | **90k all-atom CHARMM36m PME**, 54 λ coords, charge+multistate constraints — the first AA dV/dλ comparison **vs the fork** | single point worst rel **2.1e-5** (PME) / 5.0e-6 (RF) / **2.7e-6** at a displaced geometry with all λ off-centre; 60-step λ trace to 5.5e-5 (fork xvg precision) | inputs in `aurum2:~/work/Misha/CG/full_size_1d/aa_cph/pure_w113_fixlam/` (see `CPH_AA_BUG_REPRODUCER.md`) |
 
+- **‼️ A single-point (`nsteps 0`) run cannot test any GPU gate.** `nsteps 0` is a **virial step**, and
+  `useGpuFBufferOps = ... && !computeVirial` ⇒ on virial/energy steps buffer ops go **off**, the PME
+  forces come back to the host, and the GPU-resident path silently degrades to the classic one. Two
+  stale-buffer bugs (2026-08-06: PME reciprocal potential never D2H'd on the resident path; PME device
+  charges never refreshed on the classic path) survived every gate for that reason. **Any GPU gate must
+  run multiple steps with `nstcalcenergy` > run length**, so the ordinary-step schedule is what's tested.
 - **‼️ Use an all-atom system for any new force-path gate.** M6 exists because every earlier gate was Martini (no `[ pairs ]`) or port-vs-port (GPU vs CPU, so a term missing from both cancels) — and that combination hid a completely absent 1-4 pair contribution for the whole port. Compare **against the fork**, on a topology **with 1-4 pairs**.
 - **‼️ λ-trajectory comparisons vs the fork must run with `pcoupl = no` and `tcoupl = no`.** The 2021 and 2026 c-rescale / verlet-buffer implementations differ, so with coupling on the *atomic* trajectories separate within tens of steps and λ follows (0.024 by step 60 on M6 — not a cph bug; pinning `ld-seed` does not help). With coupling off, λ matched the fork to output precision over 60 steps.
 - **Reference/oracle artifacts** (`M1_oracle_dvdl.txt` etc.) were built in session scratchpads and are ephemeral; the *inputs* to rebuild them are durable in `full_size/cph/`. When picking up validation, regenerate the oracle from the fork `gmx` + the repro script rather than trusting a stale file.
