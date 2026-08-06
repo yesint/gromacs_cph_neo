@@ -212,6 +212,16 @@ bool canUseGpusForNonbonded(const t_inputrec& ir, const bool doRerun, std::strin
         }
     }
     errorReasons.appendIf(EI_TPI(ir.eI), "TPI is not implemented for GPUs.");
+    /* Constant-pH: the per-atom electrostatic potential that drives dV/dlambda is accumulated
+     * by the CUDA non-bonded kernel only (see nbnxm/cuda/nbnxm_cuda_kernel.cuh); there is no
+     * SYCL or HIP implementation. The potential buffer itself is backend-agnostic, so on those
+     * backends it would simply be copied back as zeros and dV/dlambda would silently lose its
+     * entire real-space term. PME on a GPU already requires the non-bonded on a GPU, so
+     * refusing here covers the reciprocal-space kernel too. */
+    errorReasons.appendIf(ir.lambda_dynamics && !GMX_GPU_CUDA,
+                          "Constant pH (lambda dynamics) needs the per-atom electrostatic "
+                          "potential from the non-bonded kernel, which is implemented for CUDA "
+                          "only.");
     errorReasons.finishContext();
     if (error != nullptr)
     {

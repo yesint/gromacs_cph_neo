@@ -446,3 +446,28 @@ To make that diagnosable, the bare `GMX_RELEASE_ASSERT` in `updateLambdas` is re
 `gmx_fatal` naming the coordinate, its λ value and the step, and pointing at the knobs — same
 abort semantics, but it now distinguishes "one group is running away" from "the whole setup is
 marginal".
+
+### 🛡️ Guard: constant pH on non-CUDA GPU backends (2026-08-06)
+
+The GPU per-atom-potential kernels are **CUDA only** (`nbnxm/cuda/nbnxm_cuda_kernel.cuh`,
+`ewald/pme_gather.cu`); `grep` finds no potential accumulation anywhere under `nbnxm/sycl/`.
+The buffer and its plumbing, however, are backend-agnostic (`gpu_types_common.h`,
+`nbnxm_gpu_data_mgmt.cpp` sets `computePotential` regardless of backend), so a **SYCL or HIP**
+build running cph with `-nb gpu` would allocate the buffer, clear it, copy it back as zeros and
+lose the **entire real-space term** of dV/dλ — silently, the characteristic cph failure mode.
+
+Guard added in `canUseGpusForNonbonded()`: `lambda_dynamics && !GMX_GPU_CUDA` is now an
+unsupported-input reason. That one function feeds **both** `decideWhetherToUseGpusForNonbonded`
+and its thread-MPI twin via `canUseNonbondedOnGpu`, so:
+- `-nb auto` (the default) → falls back to CPU non-bonded and logs the reason. Correct results
+  by default, which matters more here than the lost performance.
+- `-nb gpu` → `InconsistentInputError` ("not supported for these simulation settings").
+- PME needs no separate guard: `canUseGpusForPme` already requires non-bonded on the GPU.
+- **CUDA builds are unaffected** (`GMX_GPU_CUDA` = 1 ⇒ the reason is never appended), and the
+  message is only printed under `if (GMX_GPU && ...)` in `runner.cpp`, so CPU-only builds stay
+  silent.
+
+Tested: on the CPU-only `build-cpu` the true branch is the one taken (non-CUDA build), and cph
+still runs with dV/dλ unchanged vs the fork (worst rel 1.5e-5) with no spurious log message.
+The CUDA build re-verified unaffected (see below). **The SYCL/HIP branch itself is untested —
+no such build exists here**; only the condition and the fallback behaviour were exercised.
