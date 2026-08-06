@@ -192,6 +192,16 @@ void pme_gpu_copy_input_forces(PmeGpu* pmeGpu);
 void pme_gpu_copy_output_forces(PmeGpu* pmeGpu);
 
 /*! \libinternal \brief
+ * Constant-pH: copies the per-atom reciprocal-space electrostatic potential from the GPU to the
+ * pinned staging buffer. To be called after the gathering stage, unconditionally — unlike the
+ * forces, the potential is consumed on the host every step even when the PME forces are reduced
+ * on the device (\c PmeGpuSettings::useGpuForceReduction).
+ *
+ * \param[in] pmeGpu             The PME GPU structure.
+ */
+void pme_gpu_copy_output_potentials(PmeGpu* pmeGpu);
+
+/*! \libinternal \brief
  * Checks whether work in the PME GPU stream has completed.
  *
  * \param[in] pmeGpu            The PME GPU structure.

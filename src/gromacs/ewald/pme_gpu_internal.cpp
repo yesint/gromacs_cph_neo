@@ -294,17 +294,26 @@ void pme_gpu_copy_output_forces(PmeGpu* pmeGpu)
                          pmeGpu->archSpecific->pmeStream_,
                          pmeGpu->settings.transferKind,
                          nullptr);
-    /* Constant-pH: also stage the per-atom reciprocal potential the gather kernel wrote. */
-    if (pmeGpu->settings.computeElectrostaticPotential)
-    {
-        copyFromDeviceBuffer(pmeGpu->staging.h_potentials.data(),
-                             &pmeGpu->kernelParams->atoms.d_potentials,
-                             0,
-                             pmeGpu->kernelParams->atoms.nAtoms,
-                             pmeGpu->archSpecific->pmeStream_,
-                             pmeGpu->settings.transferKind,
-                             nullptr);
-    }
+}
+
+void pme_gpu_copy_output_potentials(PmeGpu* pmeGpu)
+{
+    /* Constant-pH: stage the per-atom reciprocal potential the gather kernel wrote.
+     *
+     * This is deliberately NOT part of pme_gpu_copy_output_forces(): that copy is skipped
+     * whenever the PME forces are reduced on the device (settings.useGpuForceReduction, i.e.
+     * -pme gpu together with GPU buffer ops / -update gpu), but the per-atom potential is
+     * always consumed on the host to drive the lambda ODE. Keeping it here lets the caller
+     * launch it unconditionally. */
+    GMX_ASSERT(pmeGpu->settings.computeElectrostaticPotential,
+               "Only call this when the reciprocal potential is being computed");
+    copyFromDeviceBuffer(pmeGpu->staging.h_potentials.data(),
+                         &pmeGpu->kernelParams->atoms.d_potentials,
+                         0,
+                         pmeGpu->kernelParams->atoms.nAtoms,
+                         pmeGpu->archSpecific->pmeStream_,
+                         pmeGpu->settings.transferKind,
+                         nullptr);
 }
 
 void pme_gpu_realloc_and_copy_input_coefficients(const PmeGpu* pmeGpu,
@@ -2657,6 +2666,15 @@ void pme_gpu_gather(PmeGpu*                       pmeGpu,
     else if (pmeGpu->kernelParams->atoms.nAtoms > 0)
     {
         pme_gpu_copy_output_forces(pmeGpu);
+    }
+
+    /* Constant-pH: the host needs the per-atom reciprocal potential on EVERY step to drive the
+     * lambda ODE, also when the PME forces stay on the device (useGpuForceReduction, i.e.
+     * -pme gpu with GPU buffer ops / -update gpu). Its D2H therefore cannot ride the force
+     * copy-back above; launch it here on the PME stream right after the gather. */
+    if (pmeGpu->settings.computeElectrostaticPotential && pmeGpu->kernelParams->atoms.nAtoms > 0)
+    {
+        pme_gpu_copy_output_potentials(pmeGpu);
     }
 
     wallcycle_stop(wcycle, WallCycleCounter::LaunchGpuPme);

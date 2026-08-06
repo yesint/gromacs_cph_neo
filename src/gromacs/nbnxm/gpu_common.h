@@ -307,12 +307,18 @@ bool gpu_try_finish_task(NbnxmGpu*           nb,
     // Transfers are launched and therefore need to be waited on if:
     // - buffer ops is not offloaded
     // - energies or virials are needed (on the local stream)
+    // - constant-pH: the per-atom electrostatic potential is copied back (gpu_launch_cpyback
+    //   launches that D2H for every locality it is called for, independently of the force
+    //   buffer-op flag, because the host consumes the potential every step to drive the lambda
+    //   ODE). Without this the GPU-resident path (-update gpu, buffer ops on) would read the
+    //   host potential buffer while its D2H is still in flight.
     //
     // (Note that useGpuFBufferOps and computeVirial are mutually exclusive
     // in current code as virial steps do CPU reduction.)
     const bool haveResultToWaitFor =
             (!stepWork.useGpuFBufferOps
-             || (aloc == AtomLocality::Local && (stepWork.computeEnergy || stepWork.computeVirial)));
+             || (aloc == AtomLocality::Local && (stepWork.computeEnergy || stepWork.computeVirial))
+             || nb->atdat->computePotential);
 
     //  We skip when during the non-local phase there was actually no work to do.
     //  This is consistent with nbnxn_gpu_launch_kernel but it also considers possible

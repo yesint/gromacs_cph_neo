@@ -471,3 +471,68 @@ Tested: on the CPU-only `build-cpu` the true branch is the one taken (non-CUDA b
 still runs with dV/dλ unchanged vs the fork (worst rel 1.5e-5) with no spurious log message.
 The CUDA build re-verified unaffected (see below). **The SYCL/HIP branch itself is untested —
 no such build exists here**; only the condition and the fallback behaviour were exercised.
+
+### 🐞 Bug: PME on the GPU used a stale reciprocal potential / stale charges (2026-08-06)
+
+Reported symptom: **`-update gpu` together with `-pme gpu` is broken.** It is worse than that —
+`-pme gpu` was wrong on *both* GPU paths, and for two independent reasons. Both are the classic
+cph failure mode (a silently stale/never-refreshed buffer, not a physics error), and both were
+hidden by the fact that **every earlier GPU gate was a single point (`nsteps 0`) or an
+energy/virial step**, which is exactly where neither bug fires.
+
+The pivot is `StepWorkload::useGpuFBufferOps = useGpuFBufferOpsWhenAllowed && !computeVirial`
+(`decidesimulationworkload.cpp:314`) and, from it,
+`useGpuPmeFReduction = computeSlowForces && useGpuFBufferOps && haveGpuPmeOnPpRank()`. On a
+virial/energy step buffer ops go **off**, so the PME forces come back to the host and everything
+works. On an ordinary step (`nstcalcenergy` = 100 in production ⇒ 99 steps out of 100) they stay
+on the device — and that is where the potential path fell apart.
+
+**Bug 1 — the per-atom reciprocal potential D2H was never launched on the resident path.**
+Its copy rode inside `pme_gpu_copy_output_forces()`, which `pme_gpu_gather()` calls only in the
+`else` branch of `if (settings.useGpuForceReduction)`. With `-pme gpu -update gpu` that branch is
+never taken on a non-virial step, so `staging.h_potentials` kept whatever the last virial step had
+left in it, while `pme_gpu_reduce_outputs()` went on adding it to `fr->electrostaticPotential`
+every step. A second, matching hole: `pme_gpu_wait_finish_task()` synchronised the PME stream only
+`if (!useGpuForceReduction || computeEnergyAndVirial)`, so even a launched copy would not have been
+waited for. Fix: split the potential staging out into `pme_gpu_copy_output_potentials()` and launch
+it from `pme_gpu_gather()` unconditionally (it is a host-consumed output every step, unlike the
+forces), and add `settings.computeElectrostaticPotential` to the stream-sync condition.
+
+**Bug 2 — the PME device charge buffer was never refreshed on the classic GPU path.**
+`d_coefficients` is only written by `gmx_pme_reinit_atoms()`, i.e. at startup and at each DD
+repartition — nothing else. The L3.1 per-step refresh (`gmx_pme_reinit_charges_gpu`, commit
+`e300526`) was placed **inside** `if (useGpuForUpdate)`, so `-nb gpu -pme gpu` *without*
+`-update gpu` ran PME reciprocal space — forces **and** the potential that drives dV/dλ — with the
+λ-charges frozen at their step-0 values for the whole run. Fix: the refresh is unconditional on
+`simulationWork.useGpuPme` (no-op for PME on CPU, which reads `mdatoms->chargeA` directly).
+
+**Bug 3 (latent) — the NB per-atom potential D2H was launched but never waited for.**
+`gpu_launch_cpyback()` correctly fires the potential D2H on both paths (commit `0c8244f`), but
+`gpu_try_finish_task()`'s `haveResultToWaitFor` only covered `!useGpuFBufferOps` and
+energy/virial steps, so on the resident path nothing synchronised the local NB stream before
+md.cpp read the host buffer. `-pme cpu` masks it (CPU PME is slow enough that the copy always
+lands); `-pme gpu` removes that cushion. Fix: `|| nb->atdat->computePotential` — the potential is
+a host-consumed result whenever it is computed. Untriggered in the runs below, but a real race.
+
+**Validation** — 90k all-atom CHARMM36m PME, 54 λ coords, 40 steps, `nstcalcenergy = 100` (so
+only step 0 is an energy step), `tcoupl = no`/`pcoupl = no`, `nstlist = 20`, RTX 3080 (b32_128_gpu).
+Max |Δλ| over all 54 coordinates vs the same build's `-nb cpu -pme cpu` reference, before → after:
+
+| mdrun flags | step 1 | step 10 | step 39 |
+|---|---|---|---|
+| `-nb gpu -pme gpu` (classic) | 7e-6 → **0** | 1.4e-3 → **1e-6** | **2.8e-2** → **4e-6** |
+| `-nb gpu -pme cpu -update gpu` | 0 → 0 | 1e-6 → 1e-6 | 5e-6 → **3e-6** |
+| `-nb gpu -pme gpu -update gpu` (resident) | 7e-6 → **0** | 1.4e-3 → **1e-6** | **2.8e-2** → **4e-6** |
+
+1e-6 is the `GMX_CPH_DUMP_LAMBDAS` output floor (5 decimals). The two columns isolate the two
+bugs cleanly: for the *classic* row the only behavioural change is bug 2's fix (bug 1 needs
+`useGpuForceReduction`), and for the *resident* row the only changes are bugs 1+3 (its charge
+refresh already ran). `-pme cpu -update gpu` was and remains correct, which is why the port log
+did not catch this earlier. Repro: `cphfix_job.sh` + `cphfix/md_fix.mdp` in
+`aurum2:~/work/Misha/CG/full_size_1d/aa_cph/pure_w113_fixlam/`.
+
+**Lesson (same family as the M6 1-4-pair bug).** Every GPU gate so far was `nsteps 0` or compared
+GPU-vs-GPU. A single point is a *virial step*, and on a virial step the GPU-resident path silently
+degrades to the classic path — so it cannot test residency at all. **Any future GPU gate must run
+multiple steps with `nstcalcenergy` larger than the run length**, so that the ordinary-step
+schedule is the thing under test.

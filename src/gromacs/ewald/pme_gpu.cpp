@@ -382,7 +382,11 @@ PmeOutput pme_gpu_wait_finish_task(gmx_pme_t*     pme,
     // Synchronize the whole PME stream at once, including D2H result transfers
     // if there are outputs we need to wait for at this step; we still call getOutputs
     // for uniformity and because it sets the PmeOutput.haveForceOutput_.
-    if (!pme->gpu->settings.useGpuForceReduction || computeEnergyAndVirial)
+    // Constant-pH: the per-atom reciprocal potential is a host-consumed output on every step
+    // (it drives the lambda ODE), so its D2H has to be waited for even when the forces are
+    // reduced on the device and no energy/virial is computed this step.
+    if (!pme->gpu->settings.useGpuForceReduction || computeEnergyAndVirial
+        || pme->gpu->settings.computeElectrostaticPotential)
     {
         pme_gpu_synchronize(pme->gpu);
     }

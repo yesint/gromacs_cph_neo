@@ -1271,14 +1271,17 @@ void gmx::LegacySimulator::do_md()
                     if (useGpuForUpdate)
                     {
                         fr_->nbv->uploadLambdaChargesToGpu(mdAtoms_->mdatoms()->chargeA);
-                        /* PME on the GPU keeps its own charge (coefficient) buffer, uploaded only
-                         * at neighbor search. On the resident path refresh it every step too, so
-                         * PME reciprocal space uses the current lambda charges. No-op for PME on
-                         * CPU (which reads mdatoms->chargeA directly). */
-                        if (simulationWork.useGpuPme)
-                        {
-                            gmx_pme_reinit_charges_gpu(fr_->pmedata, mdAtoms_->mdatoms()->chargeA);
-                        }
+                    }
+                    /* PME on the GPU keeps its own charge (coefficient) buffer on the device,
+                     * uploaded only when the atom data is (re)initialised — at startup and at each
+                     * DD repartition. Nothing else ever refreshes it, so it must be refreshed here
+                     * every step on BOTH GPU paths (classic and resident), otherwise PME
+                     * reciprocal space (forces *and* the per-atom potential that drives dV/dlambda)
+                     * keeps using the charges from the last atom-data init. No-op for PME on CPU,
+                     * which reads mdatoms->chargeA directly. */
+                    if (simulationWork.useGpuPme)
+                    {
+                        gmx_pme_reinit_charges_gpu(fr_->pmedata, mdAtoms_->mdatoms()->chargeA);
                     }
                 }
 
