@@ -35,13 +35,18 @@ If you use constant-pH MD, cite:
 - **Multi-rank domain decomposition**, including PME on the PP ranks: the per-atom
   potential is halo-exchanged with the force reduction and the reciprocal part is
   redistributed with the PME force redistribution.
-- **GPU (CUDA and HIP)**: the non-bonded kernel and the PME reciprocal-space gather both
-  accumulate the per-atom potential on the device, and the fully GPU-resident loop
-  (`-nb gpu -pme gpu -update gpu`) is supported on a single GPU, with only the small
-  λ ODE on the host. The HIP backend (AMD MI250X / gfx90a, the LUMI build) is validated
-  GPU-vs-CPU: dV/dλ to ~1e-6 on Martini reaction-field, ~4e-5 on Martini PME (the VkFFT
-  single-precision floor), and the resident λ trajectory matches the classic path on an
-  all-atom CHARMM36 system.
+- **GPU — NVIDIA (CUDA) and AMD (HIP)**: the non-bonded kernel and the PME reciprocal-space
+  gather both accumulate the per-atom potential on the device, and the fully GPU-resident loop
+  (`-nb gpu -pme gpu -update gpu`) is supported on a single GPU, with only the small λ ODE on the
+  host. All host plumbing is shared between backends; only the three device kernels are per-backend.
+    - **CUDA** (NVIDIA, sm ≥ 8.6 — tested on RTX 3080/3090): the original GPU port, fork-validated.
+    - **HIP** (AMD `gfx90a` / MI250X — the LUMI build, VkFFT for the GPU FFT): validated GPU-vs-CPU —
+      dV/dλ ~1e-6 on Martini reaction-field, ~4e-5 on Martini PME (the VkFFT single-precision floor),
+      and the resident λ trajectory matches the classic path on an all-atom CHARMM36 system.
+      A 2000-step production-config Martini run tracks the CPU λ trajectory to output precision until
+      FP-Lyapunov divergence, and runs stably under the production thermostat/barostat.
+  Adding HIP does not change CUDA (verified after the merge: CUDA cph dV/dλ regression 3.5e-6 on an
+  RTX 3080). SYCL/OpenCL are not implemented (guarded off — see limitation 1).
 - Force/energy path validated against the original 2021 fork: per-group dV/dλ agrees
   to ~1e-4 or better in single precision, on Martini/reaction-field, Martini/PME,
   under domain decomposition, and on an all-atom CHARMM36m PME system with charge and
