@@ -34,6 +34,41 @@ jobs — **not** for running MD (use SLURM for that; see §6).
 
 The login node has **outbound internet** (e.g. `git clone` from GitHub, EasyBuild source downloads).
 
+### ‼️ Storage — run production in scratch, not `$HOME`
+
+`$HOME` is small (22 G) and fills fast; **all production simulations and their output must run in
+the project scratch area** `/scratch/project_465003004` (50 T, expandable). See the
+[LUMI storage docs](https://docs.lumi-supercomputer.eu/storage/). Retention rules to respect:
+**no LUMI storage is backed up**, and scratch is subject to **automatic cleaning if it fills** — so
+the master copy of inputs and final results belongs in `/projappl` or off-cluster, not only in
+scratch.
+
+To keep paths convenient without polluting home, **create a per-user workspace in scratch and
+symlink it into `$HOME`** (already done for `yesylevs`; the pattern for any project/user):
+
+```bash
+mkdir -p /scratch/project_465003004/$USER && ln -s /scratch/project_465003004/$USER ~/scratch
+mkdir -p /flash/project_465003004/$USER   && ln -s /flash/project_465003004/$USER   ~/flash   # optional; fast I/O, 3x billed
+```
+
+Then run everything under `~/scratch/<run>/` (physically on scratch). Layout convention:
+
+| Lives in | What | Persistent? |
+|---|---|---|
+| `/projappl/project_465003004/EasyBuild` | installed software (§2) | yes (50 G) |
+| `$HOME/install/gromacs-2026-cph` | the git **source** tree (small; source only) | yes (22 G home) |
+| `~/scratch/<run>/` = `/scratch/…/$USER/<run>` | **all run dirs, .tpr, trajectories, checkpoints, logs** | scratch (50 T, purgeable, no backup) |
+| `~/flash/<run>/` | only when hot I/O is worth the 3× cost | flash (2 T) |
+
+**Sync-tool / workflow implications (important):**
+- The build & transfer flow (`git archive HEAD`, git bundles — §6) carries **source only** from the
+  home tree and never touches scratch. **Do not git-track or bundle run inputs/outputs.**
+- Job/run scripts must `cd ~/scratch/<run>` (or write outputs there), **not** into the source tree
+  in `$HOME`. (The small gate/test scripts in `lumi/` run in-tree by design; *production* run
+  scripts target scratch.)
+- Scratch is not backed up and may be purged: keep the master copy of inputs under `/projappl` or on
+  your workstation, and copy final results off scratch when a campaign finishes.
+
 ---
 
 ## 2. EasyBuild environment (generic — for any software)
