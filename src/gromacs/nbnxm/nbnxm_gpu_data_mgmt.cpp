@@ -1759,8 +1759,16 @@ void gpu_free(NbnxmGpu* nb)
     /* Free atdat */
     freeDeviceBuffer(&(nb->atdat->xq));
     freeDeviceBuffer(&(nb->atdat->f));
-    freeDeviceBuffer(&(nb->atdat->potential));
-    freeDeviceBuffer(&(nb->atdat->lambdaCharges));
+    /* Constant-pH: potential/lambdaCharges are allocated only when computePotential
+     * (see gpu_init_atomdata), so free them symmetrically. The raw-pointer DeviceBuffer
+     * members are left uninitialised by `new NBAtomDataGpu`; an unconditional free is a
+     * silent no-op under CUDA (cudaFree of a null/garbage-but-tolerated pointer) but
+     * hipFree()s a garbage pointer on HIP and aborts with hipErrorInvalidValue. */
+    if (atdat->computePotential)
+    {
+        freeDeviceBuffer(&(nb->atdat->potential));
+        freeDeviceBuffer(&(nb->atdat->lambdaCharges));
+    }
     freeDeviceBuffer(&(nb->atdat->eLJ));
     freeDeviceBuffer(&(nb->atdat->eElec));
     freeDeviceBuffer(&(nb->atdat->dvdlLJ));
