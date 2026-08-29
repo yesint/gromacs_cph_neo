@@ -35,10 +35,13 @@ If you use constant-pH MD, cite:
 - **Multi-rank domain decomposition**, including PME on the PP ranks: the per-atom
   potential is halo-exchanged with the force reduction and the reciprocal part is
   redistributed with the PME force redistribution.
-- **GPU (CUDA)**: the non-bonded kernel and the PME reciprocal-space gather both
+- **GPU (CUDA and HIP)**: the non-bonded kernel and the PME reciprocal-space gather both
   accumulate the per-atom potential on the device, and the fully GPU-resident loop
   (`-nb gpu -pme gpu -update gpu`) is supported on a single GPU, with only the small
-  λ ODE on the host.
+  λ ODE on the host. The HIP backend (AMD MI250X / gfx90a, the LUMI build) is validated
+  GPU-vs-CPU: dV/dλ to ~1e-6 on Martini reaction-field, ~4e-5 on Martini PME (the VkFFT
+  single-precision floor), and the resident λ trajectory matches the classic path on an
+  all-atom CHARMM36 system.
 - Force/energy path validated against the original 2021 fork: per-group dV/dλ agrees
   to ~1e-4 or better in single precision, on Martini/reaction-field, Martini/PME,
   under domain decomposition, and on an all-atom CHARMM36m PME system with charge and
@@ -46,12 +49,11 @@ If you use constant-pH MD, cite:
 
 ## Limitations
 
-1. **GPU support is CUDA only.** The per-atom-potential kernels exist for CUDA
-   (non-bonded and PME gather); SYCL and HIP builds have no such kernels. This is
-   guarded, so it cannot silently give dV/dλ = 0: on a non-CUDA build `-nb auto`
-   falls back to CPU non-bonded (logging why) and `-nb gpu` fails fast. PME on a GPU
-   requires the non-bonded on a GPU, so it is covered by the same guard. GPU
-   *emulation* (`GMX_EMULATE_GPU`) also fails fast.
+1. **GPU support is CUDA and HIP (not SYCL).** The per-atom-potential kernels exist for
+   CUDA and HIP (non-bonded and PME gather); SYCL builds have no such kernels. This is
+   guarded, so it cannot silently give dV/dλ = 0: on a SYCL build `-nb auto` falls back
+   to CPU non-bonded (logging why), `-nb gpu` fails fast, and cph + PME-on-GPU is likewise
+   refused. GPU *emulation* (`GMX_EMULATE_GPU`) also fails fast.
 
 2. **The GPU-resident update (`-update gpu`) needs a single GPU**: no domain
    decomposition and no separate PME rank. DD or separate-PME runs fall back to the

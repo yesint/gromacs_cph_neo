@@ -536,3 +536,46 @@ GPU-vs-GPU. A single point is a *virial step*, and on a virial step the GPU-resi
 degrades to the classic path — so it cannot test residency at all. **Any future GPU gate must run
 multiple steps with `nstcalcenergy` larger than the run length**, so that the ordinary-step
 schedule is the thing under test.
+
+### ✅ L5 (HIP): constant-pH GPU port to AMD / LUMI (2026-08-29, branch `hip-port`)
+
+Ported the three cph GPU device kernels from CUDA to the HIP backend so the method runs
+GPU-accelerated on LUMI-G (AMD MI250X, `gfx90a`) with VkFFT for PME. Built via EasyBuild
+(`cpeAMD/25.09`, ROCm 6.4.4, clang 19) from the LUMI contrib recipe. ~85 % of the cph GPU code
+(buffer mgmt, D2H/H2D staging, MD-loop wiring, PME host plumbing) is backend-shared and already
+compiled as HIP; only the three device kernels needed HIP twins. See `HIP_PORT_PLAN.md` for the
+per-file map and `CLAUDE.md` ("Building & running on LUMI") for the recipe.
+
+- **Prereq fix (`eaeb03c`).** `gpu_free` freed `NBAtomDataGpu::potential`/`lambdaCharges`
+  unconditionally, but they are allocated only when `computePotential`; `new NBAtomDataGpu` leaves
+  the raw-pointer members uninitialised, so a non-cph run hipFree'd garbage — silent on CUDA
+  (`cudaFree`), fatal on HIP (`hipErrorInvalidValue`) at teardown. Latent on aurum2; surfaced by
+  the first LUMI GPU run. Gated the free on `computePotential`. **CUDA↔HIP lesson:** every
+  conditionally-allocated `DeviceBuffer` must be null-initialised or its free gated — HIP
+  `freeDeviceBuffer` only null-guards, it does not tolerate an uninitialised pointer.
+- **H1 (`1f644c3`) — NB per-atom potential** in `nbnxm/hip/nbnxm_hip_kernel_body.h` (one header
+  covers all four kernel TUs). Per-pair `V_i += epsFac·qj·coulFunc`, `V_j += qi·coulFunc`, reusing
+  the kernel's own cutoff/RF/Ewald energy forms with `qi·qj` factored off; correctness-first
+  per-pair `atomicAdd`. **Gate G1:** 46-λ RF Martini single point, `-nb gpu` vs `-nb cpu`, dV/dλ
+  max rel **1.3e-6**, all 46 groups non-zero.
+- **H2 (`1496430`) — PME reciprocal potential** in `ewald/pme_gather_hip.cpp`: `sumForceComponents`
+  accumulates `θx·θy·θz·grid`; after the force reduce, a maskless `__shfl_down` over `atomDataSize`
+  lanes (HIP has no `c_fullWarpMask`) collapses to lane `splineIndex==0`, which writes
+  `d_potentials`. **Gate G2:** 46-λ PME Martini, `-nb gpu -pme gpu` vs `-nb cpu -pme cpu`, dV/dλ
+  max rel **4.5e-5** — the VkFFT single-precision floor (measured; wavefront 32→64 shuffle reduce
+  confirmed correct).
+- **H3 (`ad7cdfa`) — GPU-resident λ-charge repack** in
+  `nbnxm/hip/nbnxm_gpu_buffer_ops_internal_hip.cpp`: the X buffer-op kernel refreshes `xq.w` from
+  `lambdaCharges` each step (nullptr for non-cph). **Gate G3:** all-atom CHARMM36 cph
+  (constraints=h-bonds → GPU update supported), 100-step `-update gpu` vs `-update cpu` λ
+  trajectory, max |Δ| **1.5e-5** (identical to FP). The Martini/PW system cannot test this —
+  polarizable water gives triangle constraints, which GPU update refuses on every backend.
+- **Guards.** `decidegpuusage.cpp` now admits HIP for cph GPU NB
+  (`!(GMX_GPU_CUDA || GMX_GPU_HIP)`); `decidesimulationworkload.cpp` admits cph + PME-on-GPU on HIP.
+  SYCL still refused. No CUDA behaviour change (identical predicate on a CUDA build; H1–H3 code is
+  in `hip/` files only).
+- **Regression.** Non-cph GPU water box unchanged (`-nb gpu -pme gpu -update gpu` ~950 ns/day,
+  clean finish); all cph GPU branches are gated on `computePotential` / `gm_charge != nullptr`.
+
+Not yet merged to `master` (branch `hip-port`). Remaining: HIP DD (classic-path multi-GPU) is
+untested but backend-shared; a science-level titration gate on LUMI; upstream SYCL if ever needed.

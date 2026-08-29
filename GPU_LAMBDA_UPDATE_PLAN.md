@@ -266,7 +266,7 @@ L3.1 resident do_md wiring        ─┐
 L3.2 workload guards              ─┼ ship GPU-resident cph
 L3.3 checkpoint D2H                ┘
       └─ M2-GPU / M3-GPU / M-DD
-L5   SYCL/HIP/OpenCL              (replicate kernels)
+L5   HIP  ✅ DONE (LUMI MI250X)   (replicate kernels; SYCL/OpenCL remain)
 L4   full-device λ integrator     (optional, only if profiled necessary)
 ```
 
