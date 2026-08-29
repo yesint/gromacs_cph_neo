@@ -29,45 +29,49 @@ jobs — **not** for running MD (use SLURM for that; see §6).
 |---|---|---|
 | `/users/yesylevs` (`$HOME`) | personal, small (22 G) | dotfiles, scripts |
 | `/projappl/project_465003004` | project software / persistent | EasyBuild installs live here |
-| `/scratch/project_465003004` | large, purged periodically | run directories, trajectories |
-| `/flash/project_465003004` | fast NVMe scratch | hot I/O |
+| `/scratch/project_465003004` | large, purged periodically | one dir **per run**, symlinked into `~/work/<run>` (see below) |
+| `/flash/project_465003004` | fast NVMe scratch | hot I/O, same per-run pattern (3× billed) |
 
 The login node has **outbound internet** (e.g. `git clone` from GitHub, EasyBuild source downloads).
 
-### ‼️ Storage — run production in scratch, not `$HOME`
+### ‼️ Storage — one scratch dir per run, symlinked into `$HOME`
 
-`$HOME` is small (22 G) and fills fast; **all production simulations and their output must run in
-the project scratch area** `/scratch/project_465003004` (50 T, expandable). See the
-[LUMI storage docs](https://docs.lumi-supercomputer.eu/storage/). Retention rules to respect:
-**no LUMI storage is backed up**, and scratch is subject to **automatic cleaning if it fills** — so
-the master copy of inputs and final results belongs in `/projappl` or off-cluster, not only in
-scratch.
+`$HOME` is small (22 G, no backup) and fills fast; **large run data must live in project scratch**
+`/scratch/project_465003004` (50 T; no backup; auto-cleaned when it fills — see the
+[LUMI storage docs](https://docs.lumi-supercomputer.eu/storage/)). The convention is **one scratch
+directory *per run/campaign*, symlinked into `~/work/` under its normal name** — so each run shows up
+as an ordinary work dir but its data physically sits on scratch. **Do NOT pile every run into a
+single scratch directory, and do not run in `$HOME`.**
 
-To keep paths convenient without polluting home, **create a per-user workspace in scratch and
-symlink it into `$HOME`** (already done for `yesylevs`; the pattern for any project/user):
+Per run `<run>`:
 
 ```bash
-mkdir -p /scratch/project_465003004/$USER && ln -s /scratch/project_465003004/$USER ~/scratch
-mkdir -p /flash/project_465003004/$USER   && ln -s /flash/project_465003004/$USER   ~/flash   # optional; fast I/O, 3x billed
+mkdir -p /scratch/project_465003004/<run>              # the real run dir, on scratch
+ln -s   /scratch/project_465003004/<run>  ~/work/<run> # reachable as a normal home path
+cd ~/work/<run>                                        # now physically on scratch
+# (for hot-I/O runs, use /flash/project_465003004/<run> instead — 3x billed)
 ```
 
-Then run everything under `~/scratch/<run>/` (physically on scratch). Layout convention:
+`ls ~/work` then shows each run as its own entry (each a symlink to its own scratch dir); `du` on
+home stays tiny. Use descriptive, **unique** `<run>` names — project scratch is shared between
+members (e.g. `R100_pept_umbr_h`, `cph_aa_umbrella_w0`).
 
-| Lives in | What | Persistent? |
+Layout:
+
+| Lives in | What | Backed up? |
 |---|---|---|
-| `/projappl/project_465003004/EasyBuild` | installed software (§2) | yes (50 G) |
-| `$HOME/install/gromacs-2026-cph` | the git **source** tree (small; source only) | yes (22 G home) |
-| `~/scratch/<run>/` = `/scratch/…/$USER/<run>` | **all run dirs, .tpr, trajectories, checkpoints, logs** | scratch (50 T, purgeable, no backup) |
-| `~/flash/<run>/` | only when hot I/O is worth the 3× cost | flash (2 T) |
+| `/projappl/project_465003004/EasyBuild` | installed software (§2) | no — persistent, 50 G |
+| `$HOME/install/gromacs-2026-cph` | git **source** tree (source only, small) | no — home, 22 G |
+| `~/work/<run>` → `/scratch/…/<run>` | **each run's dir: .tpr, trajectories, checkpoints, logs** | no — scratch, purgeable |
+| `~/work/<run>` → `/flash/…/<run>` | same, when hot I/O is worth 3× billing | no — flash, 2 T |
 
-**Sync-tool / workflow implications (important):**
+**Sync-tool / workflow implications:**
 - The build & transfer flow (`git archive HEAD`, git bundles — §6) carries **source only** from the
-  home tree and never touches scratch. **Do not git-track or bundle run inputs/outputs.**
-- Job/run scripts must `cd ~/scratch/<run>` (or write outputs there), **not** into the source tree
-  in `$HOME`. (The small gate/test scripts in `lumi/` run in-tree by design; *production* run
-  scripts target scratch.)
-- Scratch is not backed up and may be purged: keep the master copy of inputs under `/projappl` or on
-  your workstation, and copy final results off scratch when a campaign finishes.
+  home tree; it never touches scratch, and run data is **never** git-tracked or bundled.
+- A run/job script first creates its per-run scratch dir + `~/work/<run>` symlink, then works inside
+  `~/work/<run>` (i.e. on scratch) — **not** in the source tree and **not** in a shared catch-all.
+- Nothing on LUMI is backed up and scratch is purgeable: keep master copies of inputs in `/projappl`
+  or on your workstation, and copy final results off scratch when a campaign finishes.
 
 ---
 
