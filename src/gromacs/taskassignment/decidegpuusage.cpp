@@ -212,16 +212,17 @@ bool canUseGpusForNonbonded(const t_inputrec& ir, const bool doRerun, std::strin
         }
     }
     errorReasons.appendIf(EI_TPI(ir.eI), "TPI is not implemented for GPUs.");
-    /* Constant-pH: the per-atom electrostatic potential that drives dV/dlambda is accumulated
-     * by the CUDA non-bonded kernel only (see nbnxm/cuda/nbnxm_cuda_kernel.cuh); there is no
-     * SYCL or HIP implementation. The potential buffer itself is backend-agnostic, so on those
-     * backends it would simply be copied back as zeros and dV/dlambda would silently lose its
-     * entire real-space term. PME on a GPU already requires the non-bonded on a GPU, so
-     * refusing here covers the reciprocal-space kernel too. */
-    errorReasons.appendIf(ir.lambda_dynamics && !GMX_GPU_CUDA,
+    /* Constant-pH: the per-atom real-space electrostatic potential that drives dV/dlambda is
+     * accumulated by the non-bonded kernel. This is implemented for CUDA (nbnxm/cuda/
+     * nbnxm_cuda_kernel.cuh) and HIP (nbnxm/hip/nbnxm_hip_kernel_body.h); there is no SYCL
+     * implementation, where the backend-agnostic potential buffer would just be copied back as
+     * zeros and dV/dlambda would silently lose its entire real-space term. The reciprocal-space
+     * (PME-on-GPU) potential is a separate kernel and is CUDA-only for now; cph + PME-on-GPU on
+     * HIP is refused in decidesimulationworkload.cpp until the HIP PME gather lands (H2). */
+    errorReasons.appendIf(ir.lambda_dynamics && !(GMX_GPU_CUDA || GMX_GPU_HIP),
                           "Constant pH (lambda dynamics) needs the per-atom electrostatic "
                           "potential from the non-bonded kernel, which is implemented for CUDA "
-                          "only.");
+                          "and HIP only.");
     errorReasons.finishContext();
     if (error != nullptr)
     {

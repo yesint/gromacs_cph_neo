@@ -1040,6 +1040,40 @@ __launch_bounds__(c_clSizeSq<pairlistType>* nthreadZ, minBlocksPerMp) __global__
                             fCjBuf += forceIJ;
                             /* accumulate i forces in registers */
                             fCiBuffer[i] -= forceIJ;
+
+                            /* Constant-pH: accumulate the per-atom electrostatic potential
+                             * V_a = sum_b epsFac*q_b*coulFunc(a,b), the dV/dlambda driver. coulFunc
+                             * is the same per-pair Coulomb value used for the pair energy above
+                             * (pairExclMask carries the exclusion correction), with the qi*qj factor
+                             * removed. qi (=xqibuf.w) is already epsFac-scaled and qj (=xqjbuf.w) is
+                             * raw, so V_i += epsFac*qj*coulFunc and V_j += qi*coulFunc. The RF/Ewald
+                             * self-term is added on the host. Runtime-gated so non-cph runs pay only a
+                             * uniform branch, and compiled out for kernels without electrostatics.
+                             * Correctness-first per-pair atomics (a register reduction can follow).
+                             * Mirrors the CUDA path in nbnxm_cuda_kernel.cuh. */
+                            if constexpr (props.elecCutoff || props.elecRF || props.elecEwald)
+                            {
+                                if (atdat.computePotential)
+                                {
+                                    float coulFunc = 0.0F;
+                                    if constexpr (props.elecCutoff)
+                                    {
+                                        coulFunc = pairExclMask * rInv - cRF;
+                                    }
+                                    if constexpr (props.elecRF)
+                                    {
+                                        coulFunc = pairExclMask * rInv + 0.5F * twoKRf * r2 - cRF;
+                                    }
+                                    if constexpr (props.elecEwald)
+                                    {
+                                        coulFunc = rInv * (pairExclMask - erff(r2 * rInv * ewaldBeta))
+                                                   - pairExclMask * ewaldShift;
+                                    }
+                                    atomicAdd(&atdat.potential[ci * c_clSize + tidxi],
+                                              epsFac * qj * coulFunc);
+                                    atomicAdd(&atdat.potential[aj], qi * coulFunc);
+                                }
+                            }
                         } // (r2 < rCoulombSq) && notExcluded
                     } // (imask & maskJI)
                     /* shift the mask bit by 1 */

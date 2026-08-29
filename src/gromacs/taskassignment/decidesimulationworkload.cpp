@@ -137,6 +137,20 @@ SimulationWorkload createSimulationWorkload(const gmx::MDLogger& mdlog,
                   "the PME rank and is not sent back to the PP ranks. Run without separate PME "
                   "ranks (e.g. mdrun -npme 0) so PME runs on the PP ranks, where it is supported.");
     }
+    /* Constant-pH: the reciprocal-space potential gather (the PME dV/dlambda term) is implemented
+     * for CUDA only. The HIP PME gather kernel does not yet write d_potentials (port work-package
+     * H2), so PME on a HIP GPU would copy back a zero reciprocal potential and dV/dlambda would
+     * silently lose that term. Refuse cph + PME-on-GPU on non-CUDA backends until H2 lands; PME on
+     * the CPU (mdrun -pme cpu) with -nb gpu, or reaction-field electrostatics, works today. */
+    if (inputrec.lambda_dynamics && simulationWorkload.useGpuPme && !GMX_GPU_CUDA)
+    {
+        gmx_fatal(FARGS,
+                  "Constant pH (lambda dynamics) with PME on the GPU is implemented for CUDA only. "
+                  "On this GPU backend the reciprocal-space electrostatic potential that drives "
+                  "dV/dlambda is not yet computed on the GPU, so it would be silently zero. Run PME "
+                  "on the CPU (mdrun -pme cpu) together with -nb gpu, or use reaction-field "
+                  "electrostatics.");
+    }
     simulationWorkload.useGpuPmePpCommunication =
             haveSeparatePmeRank && canUseDirectGpuComm
             && (pmeRunMode == PmeRunMode::GPU || pmeRunMode == PmeRunMode::Mixed);
