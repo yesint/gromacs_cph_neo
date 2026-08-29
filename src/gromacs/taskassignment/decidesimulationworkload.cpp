@@ -138,17 +138,17 @@ SimulationWorkload createSimulationWorkload(const gmx::MDLogger& mdlog,
                   "ranks (e.g. mdrun -npme 0) so PME runs on the PP ranks, where it is supported.");
     }
     /* Constant-pH: the reciprocal-space potential gather (the PME dV/dlambda term) is implemented
-     * for CUDA only. The HIP PME gather kernel does not yet write d_potentials (port work-package
-     * H2), so PME on a HIP GPU would copy back a zero reciprocal potential and dV/dlambda would
-     * silently lose that term. Refuse cph + PME-on-GPU on non-CUDA backends until H2 lands; PME on
-     * the CPU (mdrun -pme cpu) with -nb gpu, or reaction-field electrostatics, works today. */
-    if (inputrec.lambda_dynamics && simulationWorkload.useGpuPme && !GMX_GPU_CUDA)
+     * for CUDA (pme_gather.cu) and HIP (pme_gather_hip.cpp); there is no SYCL implementation, where
+     * PME on the GPU would copy back a zero reciprocal potential and dV/dlambda would silently lose
+     * that term. Refuse cph + PME-on-GPU on backends without the gather-potential kernel; PME on
+     * the CPU (mdrun -pme cpu) with -nb gpu, or reaction-field electrostatics, always works. */
+    if (inputrec.lambda_dynamics && simulationWorkload.useGpuPme && !(GMX_GPU_CUDA || GMX_GPU_HIP))
     {
         gmx_fatal(FARGS,
-                  "Constant pH (lambda dynamics) with PME on the GPU is implemented for CUDA only. "
-                  "On this GPU backend the reciprocal-space electrostatic potential that drives "
-                  "dV/dlambda is not yet computed on the GPU, so it would be silently zero. Run PME "
-                  "on the CPU (mdrun -pme cpu) together with -nb gpu, or use reaction-field "
+                  "Constant pH (lambda dynamics) with PME on the GPU is implemented for CUDA and "
+                  "HIP only. On this GPU backend the reciprocal-space electrostatic potential that "
+                  "drives dV/dlambda is not computed on the GPU, so it would be silently zero. Run "
+                  "PME on the CPU (mdrun -pme cpu) together with -nb gpu, or use reaction-field "
                   "electrostatics.");
     }
     simulationWorkload.useGpuPmePpCommunication =

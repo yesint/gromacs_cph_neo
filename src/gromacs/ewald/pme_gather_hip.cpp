@@ -183,7 +183,8 @@ __device__ static inline void sumForceComponents(float* __restrict__ fx,
                                                  const int* __restrict__ sm_gridlineIndices,
                                                  const float* __restrict__ sm_theta,
                                                  const float* __restrict__ sm_dtheta,
-                                                 const float* __restrict__ gm_grid)
+                                                 const float* __restrict__ gm_grid,
+                                                 float* __restrict__ potential) // constant-pH
 {
 #pragma unroll
     for (int ithy = ithyMin; ithy < ithyMax; ithy++)
@@ -217,6 +218,9 @@ __device__ static inline void sumForceComponents(float* __restrict__ fx,
             *fx += tdx.y * tdy.x * fxy1;
             *fy += tdx.x * tdy.y * fxy1;
             *fz += tdx.x * tdy.x * fz1;
+            /* Constant-pH: reciprocal potential = theta_x*theta_y*theta_z*grid (spline values,
+             * no derivative). fxy1 = tdz.x(=theta_z)*grid, tdx.x=theta_x, tdy.x=theta_y. */
+            *potential += tdx.x * tdy.x * fxy1;
         }
     }
 }
@@ -392,6 +396,7 @@ __launch_bounds__(sc_gatherMaxThreadsPerBlock<parallelExecutionWidth>,
     float fx = 0.0F;
     float fy = 0.0F;
     float fz = 0.0F;
+    float potential = 0.0F; // constant-pH: per-thread partial reciprocal potential
 
     const bool chargeCheck = pme_gpu_check_atom_charge(gm_coefficientsA[atomIndexGlobal]);
 
@@ -437,13 +442,35 @@ __launch_bounds__(sc_gatherMaxThreadsPerBlock<parallelExecutionWidth>,
                                                               sm_gridlineIndices,
                                                               sm_theta,
                                                               sm_dtheta,
-                                                              gm_gridA);
+                                                              gm_gridA,
+                                                              &potential);
     }
     // Reduction of partial force contributions
     __shared__ float3 sm_forces[atomsPerBlock];
     reduceAtomForces<order, atomDataSize, blockSize, parallelExecutionWidth>(
             sm_forces, atomIndexLocal, splineIndex, kernelParams.grid.realGridSizeFP, fx, fy, fz);
     __syncthreads();
+
+    /* Constant-pH: reduce and write the per-atom reciprocal potential. Each atom's atomDataSize
+     * lanes hold partial sums (over their ithz/ithy slice); a down-shuffle over the aligned
+     * atomDataSize-lane group collapses them to the group's base lane (splineIndex == 0), which
+     * stores the result. c_skipNeutralAtoms == false on GPU, so every atom -- including titratable
+     * atoms neutral at the current lambda -- has valid splines and a valid gathered potential. Only
+     * order==4 / numGrids==1 (the constant-pH regime) is handled; d_potentials is sized to
+     * nAtomsAlloc, so the atomIndexGlobal store is always in bounds (padding slots are written but
+     * never read). HIP uses maskless __shfl_down (no c_fullWarpMask). Mirrors pme_gather.cu. */
+    if constexpr (order == 4 && numGrids == 1)
+    {
+#pragma unroll
+        for (int delta = 1; delta < atomDataSize; delta <<= 1)
+        {
+            potential += __shfl_down(potential, delta, atomDataSize);
+        }
+        if (splineIndex == 0)
+        {
+            kernelParams.atoms.d_potentials[atomIndexGlobal] = potential;
+        }
+    }
 
     /* Calculating the final forces with no component branching, atomsPerBlock threads */
     const int   forceIndexLocal  = threadLocalId;
@@ -494,7 +521,8 @@ __launch_bounds__(sc_gatherMaxThreadsPerBlock<parallelExecutionWidth>,
                                                                   sm_gridlineIndices,
                                                                   sm_theta,
                                                                   sm_dtheta,
-                                                                  gm_gridB);
+                                                                  gm_gridB,
+                                                                  &potential); // numGrids==2: unused
         }
         // Reduction of partial force contributions
         reduceAtomForces<order, atomDataSize, blockSize, parallelExecutionWidth>(
