@@ -36,3 +36,4 @@ gmx_add_unit_test(ConstantPHUnitTest constant_ph-test
     CPP_SOURCE_FILES
         constant_ph.cpp
         )
+target_link_libraries(constant_ph-test PRIVATE pbcutil)

@@ -155,6 +155,7 @@ private:
     std::vector<int> allLambdaAtoms_;
     //! Booleans indicates whether an atom is a lambda atom
     std::vector<bool> isLambdaAtom_;
+    int numHomeAtoms_ = 0;
     //! equal to eLambdaTcVRESCALE, ugly but effective.
     int eLambdaThermostat_ = 0;
     //! Total number of multi state constraint groups.

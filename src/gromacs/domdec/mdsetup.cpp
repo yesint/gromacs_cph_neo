@@ -169,6 +169,7 @@ void mdAlgorithmsSetupAtomData(const gmx_domdec_t*  dd,
     if (fr->constantPH)
     {
         fr->constantPH->updateAfterPartition(dd ? dd->ga2la.get() : nullptr, numHomeAtoms, fr->natoms_force);
+        fr->electrostaticPotential = fr->constantPH->potential();
     }
 }
 

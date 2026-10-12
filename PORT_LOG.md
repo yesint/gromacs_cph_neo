@@ -579,3 +579,35 @@ per-file map and `CLAUDE.md` ("Building & running on LUMI") for the recipe.
 
 Not yet merged to `master` (branch `hip-port`). Remaining: HIP DD (classic-path multi-GPU) is
 untested but backend-shared; a science-level titration gate on LUMI; upstream SYCL if ever needed.
+
+### MPI CPU constant-pH ownership and potential-view fixes (2026-10-12)
+
+Review of `0106750` found that the home-only lambda atom mapping was also used for
+charge interpolation and the `isLambdaAtom` mask. This left halo charges at their
+topology values and suppressed 1-4 potential contributions for titratable halo
+endpoints. These errors affect force inputs even when every rank integrates the
+same reduced lambda force.
+
+- `ConstantPH::updateAfterPartition` now maps both home and halo atoms with `find()`.
+  Charge interpolation and the pair-potential mask therefore cover both.
+- `updateLambdas` restricts the per-group sum to indices below the current home-atom
+  count, recorded at each partition. Halo potentials are returned through the
+  existing reverse-halo exchange, not counted again in the global group reduction.
+- `mdAlgorithmsSetupAtomData` refreshes `fr->electrostaticPotential` immediately
+  after partitioning resizes its owning vector. Both pointer and extent stay current.
+- The lambda integrator, MPI collective, and halo-exchange ordering are unchanged.
+
+Added six regressions to the existing constant-pH test file: evolving home/halo
+charges and mask, reordered ownership with home-only reduction, absent atoms after
+repartitioning, a halo-only rank, the single-rank sum, and potential-view growth and
+shrinkage through real MD atom setup. The CPU library compiled with GCC 11.4,
+CMake 3.31.6, Debug, thread-MPI, OpenMP, no GPU/SIMD, and bundled FFTPACK.
+
+All six new tests passed against that library in an isolated test executable.
+The normal `constant_ph-test` target has a pre-existing linker failure: its two
+original barrier tests call the global `init_lambda_dwp` declaration, but the
+implementation is in an anonymous namespace. Validation excluded only those two
+tests from a temporary compile stream; the repository retains them unchanged.
+No full multi-process MPI trajectory or GPU regression was run. The mapping tests
+use synthetic domain ownership and do not exercise MPI collectives themselves.
+
